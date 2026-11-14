@@ -35,7 +35,8 @@ CREATE TABLE IF NOT EXISTS jobs(
   started_at REAL,
   finished_at REAL,
   result TEXT,
-  message TEXT NOT NULL DEFAULT ''
+  message TEXT NOT NULL DEFAULT '',
+  round INTEGER NOT NULL DEFAULT 1
 );
 CREATE TABLE IF NOT EXISTS logs(
   id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -60,6 +61,9 @@ DEFAULTS = {
     "retry_max": 3,
     "channel": "auto",        # auto = system Chrome (codec H.264 ada) -> fallback chromium
     "run_accounts": "",       # json list akun untuk run aktif
+    "loop_enabled": 0,        # default mati; user mesti centang Loop sendiri
+    "loop_count": 0,          # 0 = tanpa batas sampai Stop
+    "loop_pause": 30,         # jeda detik antar putaran
 }
 
 VALID_STATUS = ("waiting", "running", "done", "failed", "skipped", "partial")
@@ -186,11 +190,11 @@ class DB:
             self.commit()
 
     # ---------- jobs ----------
-    def add_job(self, aid, iid):
+    def add_job(self, aid, iid, rnd=1):
         with self.lock:
             cur = self.c.execute(
-                "INSERT INTO jobs(account_id,item_id,started_at,result) VALUES(?,?,?,'running')",
-                (aid, iid, time.time()))
+                "INSERT INTO jobs(account_id,item_id,started_at,result,round) VALUES(?,?,?,'running',?)",
+                (aid, iid, time.time(), int(rnd)))
             self.commit()
             return cur.lastrowid
 
@@ -204,6 +208,21 @@ class DB:
         with self.lock:
             return [dict(r) for r in self.c.execute(
                 "SELECT * FROM jobs WHERE item_id=? ORDER BY id", (iid,)).fetchall()]
+
+    def jobs_round(self, rnd, aid=None):
+        """Job pada putaran tertentu (opsional per akun)."""
+        q = "SELECT * FROM jobs WHERE round=?"
+        a = [int(rnd)]
+        if aid is not None:
+            q += " AND account_id=?"
+            a.append(int(aid))
+        with self.lock:
+            return [dict(r) for r in self.c.execute(q, a).fetchall()]
+
+    def max_round(self):
+        with self.lock:
+            r = self.c.execute("SELECT COALESCE(MAX(round),0) m FROM jobs").fetchone()
+        return r["m"] if r else 0
 
     def running_jobs(self):
         with self.lock:

@@ -8,6 +8,7 @@ Model: SATU proses (ini yang bikin shutdown bersih). Tiap akun = 1 thread Worker
 masing-masing menyalakan playwright sync sendiri; subprocess browser tidak saling bunuh.
 """
 import json
+import os
 import threading
 import time
 import traceback
@@ -15,6 +16,7 @@ from pathlib import Path
 
 from .crypto import load as sess_load, save as sess_save
 from .downloader import dest_path, is_fb_video_url, normalize, video_id
+from .io_paths import accounts_path, io_dir, queue_path
 from .paths import data_dir, db_path, session_path
 from .runner import (FB_HOME, FB_HOSTS, Orchestrator, _looks_logged_in, check_session,
                      dismiss_cookie_wall, gotoC, has_session_cookie, launch,
@@ -48,13 +50,15 @@ class Api:
     def settings(self):
         s = self.db.settings()
         s["data_dir"] = str(data_dir())
+        s["io_dir"] = str(io_dir())
         s["version"] = "1.0"
         return s
 
     def save_settings(self, patch):
         patch = patch or {}
         allow = {"default_duration", "scroll_enabled", "scroll_speed", "max_workers",
-                 "mode", "headless", "mute", "retry_max", "channel"}
+                 "mode", "headless", "mute", "retry_max", "channel",
+                 "loop_enabled", "loop_count", "loop_pause"}
         for k, v in patch.items():
             if k in allow:
                 self.db.set_setting(k, v)
@@ -70,6 +74,7 @@ class Api:
             return {"ok": False, "error": "Nama akun wajib diisi"}
         aid = self.db.add_account(name, "")
         self.db.log(f"Akun '{name}' ditambahkan; sesi kosong", aid)
+        self.refresh_xlsx("accounts")
         return {"ok": True, "id": aid}
 
     def set_account(self, aid, patch):
@@ -83,6 +88,7 @@ class Api:
             kw["proxy"] = str(patch["proxy"] or "").strip()
         if kw:
             self.db.update_account(int(aid), **kw)
+            self.refresh_xlsx("accounts")
         return {"ok": True}
 
     def delete_account(self, aid):
@@ -93,6 +99,7 @@ class Api:
             p.write_bytes(b"")
             p.unlink()
         self.db.log(f"Akun #{aid} dihapus (sesi + riwayat ikut dihapus)", level="warn")
+        self.refresh_xlsx("accounts")
         return {"ok": True}
 
     def login_account(self, aid, headless=False):
@@ -293,6 +300,7 @@ class Api:
         if bad:
             msg += f", {len(bad)} link ditolak"
         self.db.log(msg)
+        self.refresh_xlsx("queue")
         return {"ok": True, "added": len(ids), "duplicates": len(dup_db) + len(dup_batch),
                 "invalid": bad[:20], "invalid_count": len(bad), "message": msg}
 
@@ -313,6 +321,7 @@ class Api:
             kw["dur_max"] = 0
         if kw:
             self.db.update_item(int(iid), **kw)
+            self.refresh_xlsx("queue")
         return {"ok": True}
 
     def bulk_duration(self, ids, dur=None, lo=None, hi=None):
@@ -325,11 +334,13 @@ class Api:
             else:
                 self.db.update_item(i, dur_min=max(0, int(dur or 0)), dur_max=0)
         # item yang sedang berjalan tidak diubah selama durasi aktif (FR-15)
+        self.refresh_xlsx("queue")
         self.db.log(f"Durasi {len(ids)} item diubah massal -> berlaku untuk item berikutnya")
         return {"ok": True, "count": len(ids)}
 
     def reorder(self, ids):
         self.db.reorder([int(i) for i in (ids or [])])
+        self.refresh_xlsx("queue")
         return {"ok": True}
 
     def shuffle(self):
@@ -338,16 +349,19 @@ class Api:
         ids = [i["id"] for i in items]
         random.shuffle(ids)
         self.db.reorder(ids)
+        self.refresh_xlsx("queue")
         self.db.log("Urutan antrean diacak")
         return {"ok": True}
 
     def delete_item(self, iid):
         self.db.del_item(int(iid))
+        self.refresh_xlsx("queue")
         return {"ok": True}
 
     def delete_items(self, ids):
         for i in (ids or []):
             self.db.del_item(int(i))
+        self.refresh_xlsx("queue")
         return {"ok": True, "count": len(ids or [])}
 
     def clear_queue(self, only_done=False):
@@ -357,9 +371,11 @@ class Api:
                 if it["status"] in ("done", "failed", "partial", "skipped"):
                     self.db.del_item(it["id"])
                     n += 1
+            self.refresh_xlsx("queue")
             self.db.log(f"{n} item selesai/gagal dibersihkan")
             return {"ok": True, "count": n}
         self.db.clear_queue()
+        self.refresh_xlsx("queue")
         self.db.log("Antrean dikosongkan", level="warn")
         return {"ok": True}
 
@@ -368,6 +384,101 @@ class Api:
             self.db.update_item(it["id"], status="waiting", retries=0)
         self.db.log("Status antrean direset ke menunggu")
         return {"ok": True}
+
+    # ---------------- import / export (Excel, folder project) ----------------
+    def io_paths(self):
+        return {"dir": str(io_dir()), "queue": str(queue_path()),
+                "accounts": str(accounts_path())}
+
+    def refresh_xlsx(self, what="both"):
+        """Tulis ulang file Excel dari DB. Dipanggil otomatis tiap antrean/akun berubah."""
+        from . import xlsxio
+        out = {}
+        try:
+            if what in ("both", "queue"):
+                out["queue"] = str(xlsxio.write_queue(queue_path(), self.db.queue()))
+            if what in ("both", "accounts"):
+                out["accounts"] = str(xlsxio.write_accounts(accounts_path(), self.db.accounts()))
+        except Exception as e:
+            self.db.log(f"Gagal menulis file Excel: {type(e).__name__}: {e}", level="warn")
+            return {"ok": False, "error": str(e)}
+        return {"ok": True, **out}
+
+    def import_queue_xlsx(self, path=None, replace=False):
+        """Impor antrean dari Excel. Kolom dikenali: url, durasi_detik, status."""
+        from . import xlsxio
+        p = Path(path) if path else queue_path()
+        try:
+            rows = xlsxio.read_rows(p, ["url", "durasi_detik", "status"])
+        except Exception as e:
+            return {"ok": False, "error": f"gagal baca {p}: {e}"}
+        urls, durs, bad = [], [], 0
+        for r in rows:
+            u = normalize(str(r.get("url") or ""))
+            if not u:
+                continue
+            if not is_fb_video_url(u):
+                bad += 1
+                continue
+            urls.append(u)
+            d = r.get("durasi_detik")
+            try:
+                durs.append(max(0, int(float(d))) if d not in (None, "") else None)
+            except Exception:
+                durs.append(None)
+        if replace:
+            self.db.clear_queue()
+        res = self.add_links("\n".join(urls))
+        if any(d for d in durs):
+            for it, d in zip(self.db.queue()[-len(urls):], durs):
+                if d:
+                    self.db.update_item(it["id"], dur_min=d, dur_max=0)
+        self.refresh_xlsx("queue")
+        msg = (f"Impor {res.get('added', 0)} link dari {Path(p).name}"
+               + (f", {res.get('duplicates', 0)} duplikat" if res.get("duplicates") else "")
+               + (f", {bad} link ditolak" if bad else ""))
+        self.db.log(msg)
+        return {"ok": True, "message": msg, "added": res.get("added", 0),
+                "invalid": bad, "path": str(p)}
+
+    def import_accounts_xlsx(self, path=None):
+        """Impor daftar akun dari Excel. Kolom: nama, aktif, proxy. Sesi tetap harus login manual."""
+        from . import xlsxio
+        p = Path(path) if path else accounts_path()
+        try:
+            rows = xlsxio.read_rows(p, ["nama", "aktif", "proxy"])
+        except Exception as e:
+            return {"ok": False, "error": f"gagal baca {p}: {e}"}
+        have = {a["name"].strip().lower() for a in self.db.accounts()}
+        added = 0
+        for r in rows:
+            name = str(r.get("nama") or "").strip()
+            if not name or name.lower() in have:
+                continue
+            aid = self.db.add_account(name, "")
+            proxy = str(r.get("proxy") or "").strip()
+            en = str(r.get("aktif") or "").strip().lower()
+            kw = {}
+            if proxy:
+                kw["proxy"] = proxy
+            if en in ("tidak", "no", "0", "false", "n"):
+                kw["enabled"] = 0
+            if kw:
+                self.db.update_account(aid, **kw)
+            have.add(name.lower())
+            added += 1
+        self.refresh_xlsx("accounts")
+        msg = f"{added} akun diimpor dari {Path(p).name} (sesi masih perlu Login manual)"
+        self.db.log(msg)
+        return {"ok": True, "message": msg, "added": added, "path": str(p)}
+
+    def open_io_dir(self):
+        d = io_dir()
+        try:
+            os.startfile(str(d))
+            return {"ok": True, "message": f"Folder dibuka: {d}", "dir": str(d)}
+        except Exception as e:
+            return {"ok": False, "error": f"{e} (folder: {d})", "dir": str(d)}
 
     # ---------------- import / export ----------------
     def export_queue(self, fmt="csv"):

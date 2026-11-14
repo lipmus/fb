@@ -46,6 +46,15 @@ def main():
     class Stop(Exception):
         pass
 
+    class FakeWorker(threading.Thread):
+        def __init__(self, aid):
+            super().__init__(daemon=True)
+            self.aid = aid
+            self.done = False
+            self.item_id = None
+            self.paused = False
+            self.remaining = 0.0
+
     class O:
         stopping = False
 
@@ -60,7 +69,11 @@ def main():
             w.send("stop")
         def on_worker_exit(self, w):
             pass
+        def round_end(self, w):
+            return False
 
+    # chrome mesti tetap hidup untuk diperiksa, jadi jalankan mesin worker sungguhan
+    # tapi _loop dibuat langsung berhenti: pakai Worker asli + os berhenti setelah siap
     ws = []
     for a in accs:
         w = Worker(O(db), a, s)

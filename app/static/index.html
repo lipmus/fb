@@ -113,6 +113,12 @@ td input.dur{width:70px;padding:3px 6px;text-align:right}
       <span class="pill">Akun aktif <b id="gacc">0</b></span>
       <span class="pill" id="gram-pill">RAM <b id="gram">-</b></span>
       <span class="spacer"></span>
+      <label class="pill" title="Setelah antrean habis, ulangi dari awal">
+        <input type="checkbox" id="h-loop"> <span style="color:var(--muted)">Loop</span></label>
+      <input id="h-loopn" type="number" min="0" title="Jumlah putaran, 0 = tanpa batas" style="width:72px"
+        placeholder="0x">
+      <input id="h-loopp" type="number" min="0" title="Jeda antar putaran (detik)" style="width:72px"
+        placeholder="30s">
       <button id="b-start" class="primary">Mulai</button>
       <button id="b-pause">Jeda</button>
       <button id="b-stop" class="danger">Stop</button>
@@ -129,6 +135,9 @@ td input.dur{width:70px;padding:3px 6px;text-align:right}
         <div class="kpi"><div class="n" id="k-done">0</div><div class="l">Item selesai</div></div>
         <div class="kpi"><div class="n" id="k-fail">0</div><div class="l">Item gagal/sebagian</div></div>
         <div class="kpi"><div class="n" id="k-total">0</div><div class="l">Total antrean</div></div>
+        <div class="kpi" id="k-round-kpi" style="display:none">
+          <div class="n" id="k-round">1</div><div class="l" id="k-round-l">Putaran</div>
+          <div class="bar"><i id="k-round-bar" style="width:0%"></i></div></div>
       </div>
       <div class="card"><h2>Worker per akun</h2><div class="grid g4" id="workers"></div></div>
       <div class="card"><h2>Log terbaru</h2><div class="log" id="dash-log"></div></div>
@@ -152,6 +161,15 @@ td input.dur{width:70px;padding:3px 6px;text-align:right}
         <tbody id="acc-body"></tbody></table>
         <div class="hint" style="margin-top:8px">Sesi disimpan terenkripsi dengan kunci Windows (DPAPI)
         di folder data aplikasi. Log tidak memuat cookie/token.</div>
+        <div class="row" style="margin-top:8px">
+          <button id="b-acc-xl">Simpan akun ke Excel</button>
+          <button id="b-acc-import">Impor akun dari Excel</button>
+          <span class="hint">Daftar akun juga ditulis otomatis ke
+            <code>akun.xlsx</code> di folder project. Impor mengenali kolom
+            <code>nama</code>, <code>aktif</code> (ya/tidak), <code>proxy</code>;
+            akun dengan nama yang sudah ada dilewati, sesi tetap perlu Login manual.</span>
+          <span class="hint" id="acc-io-msg"></span>
+        </div>
       </div>
     </section>
 
@@ -161,10 +179,16 @@ td input.dur{width:70px;padding:3px 6px;text-align:right}
         <textarea id="q-paste" rows="5" placeholder="https://www.facebook.com/watch?v=...&#10;https://www.facebook.com/reel/...&#10;satu link per baris"></textarea>
         <div class="row" style="margin-top:8px">
           <button class="primary" id="b-addlinks">Tambah ke antrean</button>
-          <button id="b-import">Impor file CSV/TXT</button>
-          <button id="b-export">Ekspor CSV</button>
+          <button id="b-xl-refresh">Simpan ke Excel</button>
+          <button id="b-xl-import">Impor dari Excel</button>
+          <button id="b-xl-open">Buka folder</button>
           <span class="hint" id="q-msg"></span>
         </div>
+        <div class="hint" style="margin-top:6px">File Excel ada di folder project:
+          <code id="io-dir"></code> — <code>antrean.xlsx</code> dan <code>akun.xlsx</code>.
+          File ditulis ulang otomatis setiap antrean berubah, jadi kamu bisa mengeditnya di
+          Excel lalu tekan <b>Impor dari Excel</b> untuk memasukkannya kembali.
+          Impor bersifat menambah (bukan menimpa) kecuali kamu centang <b>Ganti antrean lama</b>.</div>
       </div>
       <div class="card">
         <h2>Antrean</h2>
@@ -177,6 +201,7 @@ td input.dur{width:70px;padding:3px 6px;text-align:right}
           <input id="q-bhi" type="number" min="0" placeholder="maks" style="width:80px">
           <button id="b-bulkrange">Rentang acak</button>
           <span class="spacer" style="flex:1"></span>
+          <label class="hint"><input type="checkbox" id="q-replace"> Ganti antrean lama</label>
           <button id="b-shuffle">Acak urutan</button>
           <button id="b-reset">Reset status</button>
           <button id="b-cleardone">Bersihkan selesai</button>
@@ -330,13 +355,22 @@ function renderTop(){
   const s = S.status, w = (s.workers||[]);
   const running = s.running && !s.stopping, busy = w.filter(x=>x.busy).length;
   $('#gdot').className = 'dot ' + (running ? (busy?'run':'ok') : '');
+  const loopTxt = s.loop ? (s.loop_count ? `, loop ${s.round}/${s.loop_count}` : `, loop ${s.round}`) : '';
   $('#gstate').textContent = !s.running ? 'Idle' : s.stopping ? 'Berhenti...' :
-    (w.some(x=>x.paused) ? `Jalan (${busy} sibuk, ada jeda)` : `Jalan (${busy} sibuk)`);
+    (w.some(x=>x.paused) ? `Jalan (${busy} sibuk, ada jeda)${loopTxt}` : `Jalan (${busy} sibuk)${loopTxt}`);
   $('#gitem').textContent = `${s.done||0}/${s.total||0}`;
   $('#gacc').textContent = (s.accounts||[]).filter(a=>a.enabled).length;
   $('#k-acc').textContent = (s.accounts||[]).filter(a=>a.enabled && a.status==='active').length;
   $('#k-done').textContent = s.done||0; $('#k-fail').textContent = s.failed||0;
   $('#k-total').textContent = s.total||0;
+  const showRound = !!(s.loop && s.running);
+  $('#k-round-kpi').style.display = showRound ? '' : 'none';
+  if(showRound){
+    $('#k-round').textContent = s.loop_count ? `${s.round} / ${s.loop_count}` : s.round;
+    const pct = s.round_total ? Math.min(100, Math.round((s.round_done||0)/s.round_total*100)) : 0;
+    $('#k-round-bar').style.width = pct + '%';
+    $('#k-round-l').textContent = `Putaran ini ${s.round_done||0}/${s.round_total||0} job`;
+  }
   $('#gram-pill').style.display = s.ram_mb ? '' : 'none';
   $('#gram').textContent = s.ram_mb ? s.ram_mb + ' MB' : '';
   $('#b-start').disabled = !!s.running;
@@ -411,6 +445,13 @@ $('#b-addacc').onclick = () => {
   const n = $('#acc-name').value.trim(); if(!n) return toast('Nama akun kosong','err');
   call('add_account', n).then(r=>{ if(r.ok){ toast('Akun ditambah','ok'); $('#acc-name').value=''; } else toast(r.error,'err'); });
 };
+$('#b-acc-xl').onclick = () => call('refresh_xlsx','accounts').then(r =>
+  toast(r.ok ? `akun.xlsx ditulis: ${r.accounts}` : r.error, r.ok?'ok':'err'));
+$('#b-acc-import').onclick = () => modal('Impor akun dari Excel',
+  'Baca akun.xlsx dan tambahkan akun baru (nama yang sudah ada dilewati)?',
+  () => call('import_accounts_xlsx').then(r => {
+    $('#acc-io-msg').textContent = r.message || r.error || '';
+    toast(r.message || r.error, r.ok?'ok':'err'); }));
 
 /* ---------------- queue ---------------- */
 function renderQueueStatusOnly(){
@@ -472,6 +513,13 @@ $('#b-addlinks').onclick = () => call('add_links', $('#q-paste').value).then(r=>
   $('#q-msg').textContent = r.message || r.error || '';
   if(r.ok){ $('#q-paste').value=''; toast(r.message,'ok'); loadQueue(); } else toast(r.error,'err');
 });
+$('#b-xl-refresh').onclick = () => call('refresh_xlsx','both').then(r =>
+  toast(r.ok ? `Excel ditulis: ${r.queue || ''}` : r.error, r.ok?'ok':'err'));
+$('#b-xl-import').onclick = () => modal('Impor dari Excel',
+  `Baca ${$('#q-replace').checked ? 'dan GANTI antrean dengan' : 'dan tambahkan'} isi antrean.xlsx?`,
+  () => call('import_queue_xlsx', null, $('#q-replace').checked).then(r => {
+    toast(r.message || r.error, r.ok?'ok':'err'); if(r.ok) loadQueue(); }));
+$('#b-xl-open').onclick = () => call('open_io_dir').then(r => toast(r.message || r.error, r.ok?'ok':'err'));
 $('#b-bulk').onclick = () => {
   const d = parseInt($('#q-bdur').value || '0');
   if(!S.sel.size) return toast('Pilih item dulu','err');
@@ -490,11 +538,7 @@ $('#b-cleardone').onclick = () => modal('Bersihkan item selesai','Hapus semua it
   call('clear_queue', true).then(r=>{ toast(`${r.count} item dibersihkan`,'ok'); loadQueue(); }));
 $('#b-clear').onclick = () => modal('Kosongkan antrean','Hapus SEMUA item antrean? Tindakan ini tidak bisa dibatalkan.', () =>
   call('clear_queue').then(()=>{ toast('Antrean dikosongkan','ok'); loadQueue(); }));
-$('#b-export').onclick = () => call('export_queue','csv').then(r=>toast('Ekspor: '+r.path,'ok'));
-$('#b-import').onclick = () => {
-  const p = prompt('Path file CSV/TXT absolut:'); if(!p) return;
-  call('import_queue', p).then(r=>{ toast(r.message||r.error, r.ok?'ok':'err'); loadQueue(); });
-};
+$('#b-xl-open').onclick = () => call('open_io_dir').then(r => toast(r.message || r.error, r.ok?'ok':'err'));
 
 /* ---------------- downloader ---------------- */
 $('#b-dl').onclick = () => {
@@ -539,13 +583,35 @@ $('#b-save').onclick = () => call('save_settings', {
   channel: $('#s-chan').value,
   headless: $('#s-head').checked ? 1 : 0,
   mute: $('#s-mute').checked ? 1 : 0,
-}).then(r => { S.settings = r.settings; toast('Pengaturan disimpan','ok');
+  ...loopPatch(),
+}).then(r => { S.settings = r.settings; fillLoop(); toast('Pengaturan disimpan','ok');
   $('#s-msg').textContent = 'tersimpan ' + new Date().toLocaleTimeString(); });
 $('#b-lg-refresh').onclick = () => loadLogs();
 $('#b-lg-export').onclick = () => {
   const acc = $('#lg-acc').value;
   call('export_logs', acc?parseInt(acc):null, $('#lg-level').value||null).then(r=>toast('Ekspor: '+r.path,'ok'));
 };
+
+/* ---------------- looping (di sebelah tombol Mulai) ---------------- */
+function loopPatch(){
+  return {
+    loop_enabled: $('#h-loop').checked ? 1 : 0,
+    loop_count: Math.max(0, parseInt($('#h-loopn').value || '0')),
+    loop_pause: Math.max(0, parseInt($('#h-loopp').value || '0')),
+  };
+}
+['h-loop','h-loopn','h-loopp'].forEach(id => {
+  const el = $('#'+id);
+  el.onchange = () => call('save_settings', loopPatch()).then(r => {
+    S.settings = r.settings; toast('Loop disimpan','ok'); });
+});
+function fillLoop(){
+  const s = S.settings || {};
+  $('#h-loop').checked = !!s.loop_enabled;
+  $('#h-loopn').value = s.loop_count || 0;
+  $('#h-loopp').value = s.loop_pause ?? 30;
+  $('#io-dir').textContent = s.io_dir || '';
+}
 
 /* ---------------- global controls ---------------- */
 $('#b-start').onclick = () => call('start').then(r=> toast(r.ok?r.message:r.error, r.ok?'ok':'err'));
@@ -563,7 +629,7 @@ document.addEventListener('keydown', e => {
 async function boot(){
   for(let i=0;i<60 && !api();i++) await new Promise(r=>setTimeout(r,250));
   if(!api()){ toast('Bridge UI tidak tersedia. Jalankan lewat start.bat (bukan buka file HTML langsung).','err'); return; }
-  const r = await call('settings'); S.settings = r; fillSettings();
+  const r = await call('settings'); S.settings = r; fillSettings(); fillLoop();
   await loadQueue(); await loadLogs();
   call('ui_ready', r.version);
   poll();

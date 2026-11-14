@@ -323,6 +323,7 @@ class Worker(threading.Thread):
         self.done = False
         self.hard_error = ""
         self._last_check = 0.0
+        self.round = 1
 
     # ---- control dari UI/orchestrator ----
     def send(self, cmd):
@@ -419,7 +420,15 @@ class Worker(threading.Thread):
 
             item = self.orch.claim(self, page)
             if not item:
-                if time.time() - idle_since > 60 or self.orch.is_drained():
+                if self.orch.is_drained():
+                    # putaran selesai: tunggu semua akun sampai di titik ini, lalu mulai
+                    # putaran berikutnya (atau pulang kalau looping mati / kuota habis)
+                    again = self.orch.round_end(self)
+                    if not again:
+                        return
+                    idle_since = time.time()
+                    continue
+                if time.time() - idle_since > 60:
                     self.db.log("Antrean untuk worker ini sudah habis", self.aid)
                     return
                 time.sleep(random.uniform(3, 7))
@@ -430,7 +439,7 @@ class Worker(threading.Thread):
                 continue
 
             idle_since = time.time()
-            jid = self.db.add_job(self.aid, item["id"])
+            jid = self.db.add_job(self.aid, item["id"], self.orch.round)
             try:
                 ok, msg = self._run_item(page, item)
             except Exception as e:
@@ -453,6 +462,13 @@ class Worker(threading.Thread):
             return False, f"gagal buka link: {type(e).__name__}: {e}"
         page.wait_for_timeout(2500)
         dismiss_cookie_wall(page)
+
+        # putaran berjalan: pekerja sebelumnya sudah maju ke putaran berikutnya, jadi
+        # jangan tulis ulang status item milik putaran lama (bikin progres kacau)
+        if self.orch.round > self.round:
+            self.round = self.orch.round
+        if self.round < self.orch.round:
+            return False, "dilewati: putaran sudah lewat"
 
         if blocked_by_login(page):
             ok = check_session(page, self.db, self.aid)
@@ -533,6 +549,8 @@ class Worker(threading.Thread):
         if progressed <= 0.5:
             return False, f"tak ada pemutaran terdeteksi selama {dur}s"
         pct = min(100, int(progressed / max(1.0, dur) * 100))
+        # looping: nilai "habis" relatif ke durasi, bukan ke video aslinya - video 4 menit
+        # tidak akan "selesai" kalau cuma ditonton 60 detik. Itu memang tujuan auto-watch.
         return True, f"tayang {played}s / minta {dur}s ({pct}% dari durasi), video posisi {round(last_t)}s"
 
 
@@ -547,6 +565,18 @@ class Orchestrator:
         self.stopping = False
         self.retry_max = 3
         self.mode = "all"
+        self.round = 1           # putaran ke-berapa (looping)
+        self.loop_enabled = False
+        self.loop_count = 0      # 0 = tanpa batas
+        self.loop_pause = 30
+        # status per putaran: jumlah job selesai & jumlah akun yang sudah menuntaskan putaran
+        self._round_done = 0
+        self._round_all = 0
+        self._seq = 0            # nomor urut job di putaran ini (dipakai ambil item berikutnya)
+        self._round_finished = set()   # aid yang sudah sampai ujung putaran
+        self._loop_stop = False        # True = putaran berhenti, semua worker harus keluar
+        self._round_gate = threading.Lock()
+        self._round_cond = threading.Condition(self._round_gate)
         self.split_map = {}      # aid -> set(item_id) kalau mode split
         self._claimed = {}       # item_id -> aid sedang dipakai
         self._jobs_per_item = {}  # item_id -> {aid: hasil}
@@ -572,6 +602,12 @@ class Orchestrator:
             self._done_items = set()
             self._claimed = {}
             self._jobs_per_item = {}
+            self.round = 1
+            self.loop_enabled = bool(settings.get("loop_enabled"))
+            self.loop_count = int(settings.get("loop_count", 0) or 0)
+            self.loop_pause = int(settings.get("loop_pause", 30) or 0)
+            self._loop_stop = False
+            self._reset_round()
 
             # reset status item supaya run baru tidak meneruskan status run lama
             for it in self.db.queue():
@@ -594,11 +630,82 @@ class Orchestrator:
                     self.db.log(f"Akun '{a['name']}' tidak dijalankan: batas worker tercapai", a["id"], level="warn")
                     break
                 self.workers[a["id"]] = Worker(self, a, settings)
+            self._round_all = len(self.workers)
             for w in self.workers.values():
                 w.start()
+            loop_txt = (f", looping {'tanpa batas' if not self.loop_count else str(self.loop_count) + 'x'}"
+                        if self.loop_enabled else ", tanpa looping")
             self.db.log(f"Run dimulai: {len(self.workers)} akun, mode={self.mode}, "
-                        f"{len(order)} item antrean")
-            return True, f"{len(self.workers)} worker jalan"
+                        f"{len(order)} item antrean{loop_txt}")
+            return True, f"{len(self.workers)} worker jalan{loop_txt}"
+
+    def _reset_round(self, locked=False):
+        """Reset status putaran. locked=True kalau _round_cond sudah dipegang pemanggil."""
+        if locked:
+            self._round_done = 0
+            self._round_all = len(self.workers)
+            self._round_finished = set()
+            return
+        with self._round_gate:
+            self._round_done = 0
+            self._round_all = len(self.workers)
+            self._round_finished = set()
+
+    def round_end(self, worker):
+        """Semua item putaran ini sudah dikerjakan akun yang bersangkutan.
+
+        Kembalikan True kalau worker harus lanjut ke putaran berikutnya, False kalau berhenti.
+        Putaran baru dimulai setelah SEMUA akun sampai di titik ini, supaya tiap akun
+        memutar antrean yang sama secara penuh (percuma looping kalau satu akun sudah
+        lari ke putaran 2 sementara akun lain masih di putaran 1).
+        """
+        my_round = worker.round = self.round
+        with self._round_cond:
+            if not self.db.queue():
+                # antrean kosong: jangan berputar-putar tanpa pekerjaan
+                self.db.log("Antrean kosong -> berhenti", worker.aid)
+                self._loop_stop = True
+                self._round_cond.notify_all()
+                return False
+            self._round_finished.add(worker.aid)
+            if len(self._round_finished) < len(self.workers) and not self.stopping:
+                self.db.log("Putaran selesai untuk akun ini; menunggu akun lain", worker.aid)
+                self._round_cond.wait_for(
+                    lambda: self.stopping or self._loop_stop or self.round != my_round,
+                    timeout=3600)
+            if self.stopping or self._loop_stop:
+                return False
+            if self.round != my_round:
+                return True          # akun lain sudah membuka putaran berikutnya
+            # akun terakhir di putaran ini: dia yang memutuskan lanjut atau berhenti
+            nxt = self.round + 1
+            if not self.loop_enabled:
+                self.db.log(f"Putaran {self.round} selesai; looping mati -> berhenti")
+                self._loop_stop = True
+                self._round_cond.notify_all()
+                return False
+            if self.loop_count and nxt > self.loop_count:
+                self.db.log(f"Putaran {self.round} selesai; batas {self.loop_count} putaran "
+                            f"tercapai -> berhenti")
+                self._loop_stop = True
+                self._round_cond.notify_all()
+                return False
+            self.round = nxt
+            for it in self.db.queue():
+                self.db.update_item(it["id"], status="waiting", retries=0)
+            # locked=True: lock ini sudah dipegang di sini; akuisisi kedua = deadlock
+            self._reset_round(locked=True)
+            self.db.log(f"=== Putaran {self.round}"
+                        + (f" dari {self.loop_count}" if self.loop_count else " (tanpa batas)")
+                        + f" dimulai; jeda {self.loop_pause}s ===")
+            self._round_cond.notify_all()
+        if self.loop_pause:
+            # jeda di luar lock supaya Stop dan worker lain tidak ikut menunggu
+            for _ in range(self.loop_pause):
+                if self.stopping:
+                    return False
+                time.sleep(1)
+        return True
 
     def stop(self, hard=False):
         with self.lock:
@@ -607,6 +714,8 @@ class Orchestrator:
             self.stopping = True
             for w in self.workers.values():
                 w.send("stop")
+        with self._round_cond:
+            self._round_cond.notify_all()   # bangunkan worker yang menunggu akhir putaran
         if hard:
             self.cleanup_now()
         return True, "stop diproses"
@@ -666,16 +775,19 @@ class Orchestrator:
 
     # ---- pembagian item ----
     def is_drained(self):
-        """True kalau tidak ada lagi item yang bisa diklaim worker mana pun."""
+        """True kalau tidak ada item lagi yang bisa diklaim worker mana pun di putaran ini."""
         with self.lock:
-            for it in self.db.queue():
-                if it["status"] in ("done", "skipped"):
+            items = self.db.queue()
+            if not items:
+                return True
+            for aid, w in self.workers.items():
+                if w.done:
                     continue
-                for aid in self.workers:
-                    if not self._item_allowed(aid, it["id"]):
+                mine = {j["item_id"] for j in self.db.jobs_round(self.round, aid)}
+                for it in items:
+                    if it["id"] in mine:
                         continue
-                    jobs = self.db.jobs_for_item(it["id"])
-                    if not any(j["account_id"] == aid for j in jobs):
+                    if self._item_allowed(aid, it["id"]):
                         return False
             return True
 
@@ -685,25 +797,24 @@ class Orchestrator:
         return iid in self.split_map.get(aid, set())
 
     def claim(self, worker, page):
-        """Item berikutnya yang BELUM dikerjakan worker ini. Idempoten -> resume/restart aman.
+        """Item berikutnya di PUTARAN INI yang belum dikerjakan worker ini.
 
-        Kunci eksklusi per (akun, item), bukan per item: di mode 'all' semua akun memang
-        harus memutar seluruh antrean, dan itulah paralelismenya.
+        Kunci eksklusi per (akun, putaran): dalam satu putaran tiap akun memutar tiap item
+        sekali; di putaran berikutnya item yang sama boleh diambil lagi. Di mode 'all'
+        semua akun memang memutar seluruh antrean - itu paralelismenya.
         """
         aid = worker.aid
         with self.lock:
+            mine = {j["item_id"] for j in self.db.jobs_round(self.round, aid)}
             for it in self.db.queue():
                 iid = it["id"]
-                if it["status"] in ("done", "skipped"):
+                if iid in mine:
                     continue
                 if not self._item_allowed(aid, iid):
                     continue
-                jobs = self.db.jobs_for_item(iid)
-                if any(j["account_id"] == aid for j in jobs):
-                    # akun ini sudah punya job untuk item ini (done/failed/interrupted)
-                    continue
                 self.db.update_item(iid, status="running")
                 worker.item_id = iid
+                worker.round = self.round
                 return it
         return None
 
@@ -732,6 +843,13 @@ class Orchestrator:
                 st = "running"
             retries = len(results.get(worker.aid, []))
             self.db.update_item(iid, status=st, retries=retries)
+            # progres putaran: job selesai di putaran ini (dipakai dashboard saat looping)
+            rows = self.db.c.execute(
+                "SELECT result FROM jobs WHERE round=?", (self.round,)).fetchall()
+            with self._round_gate:
+                self._round_done = sum(1 for r in rows if r["result"] in ("done", "failed",
+                                                                         "interrupted"))
+                self._round_all = len(self.workers) * len(self.db.queue())
         worker.remaining = 0.0
 
     def _target_accounts(self, iid):
@@ -776,4 +894,7 @@ class Orchestrator:
                 "running": self.running, "stopping": self.stopping,
                 "mode": self.mode, "workers": ws,
                 "total": len(items), "done": done, "failed": failed, "active": running,
+                "round": self.round, "loop": self.loop_enabled,
+                "loop_count": self.loop_count,
+                "round_done": self._round_done, "round_total": self._round_all,
             }

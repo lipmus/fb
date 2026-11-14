@@ -14,3 +14,6 @@ app.db-wal
 app.db-shm
 ui_ready.json
 downloads/
+# file kerja Excel (isi nyata ada di DB; ini hasil ekspor)
+io/*.xlsx
+io/*.csv

@@ -56,19 +56,59 @@ sama. Kalau URL media tidak terdeteksi, pesannya muncul di daftar (video private
 Format: `{id}_{label}.mp4`. Kalau `--label` kosong, nama file = `{id}.mp4` — pakai
 `--label` untuk memberi konteks.
 
+## Looping
+
+Ada di sebelah tombol **Mulai** di header: centang **Loop**, isi `0x` (jumlah putaran;
+0 = tanpa batas sampai Stop) dan `30s` (jeda antar putaran). Setelan tersimpan begitu diubah
+dan juga ada di tab Pengaturan.
+
+- Satu putaran = setiap akun memutar seluruh antrean sekali (mengikuti mode pembagian).
+- **Putaran berikutnya baru mulai setelah SEMUA akun menuntaskan putaran ini.** Kalau tidak,
+  akun cepat sudah masuk putaran 2 sementara akun lambat masih di putaran 1 — progresnya
+  jadi tidak masuk akal.
+- Dashboard menampilkan kartu **Putaran** dengan progres job putaran ini.
+- Setiap job menyimpan nomor putarannya di tabel `jobs`, jadi riwayatnya bisa diaudit.
+- Stop selalu menghentikan di tempat, termasuk saat menunggu akun lain di akhir putaran.
+
+Catatan semantik: durasi tonton diperlakukan sebagai target, bukan syarat video habis. Video
+4 menit yang diminta ditonton 60 detik akan ditandai selesai setelah 60 detik — itu memang
+tujuan auto-watch. Kalau loop diaktifkan, video yang sama akan diulang dari awal tiap putaran.
+
+## Impor/ekspor Excel (folder project)
+
+File selalu ditulis & dibaca dari folder project: `D:\auto-nonton-fb\io\`
+
+| File | Isi |
+|---|---|
+| `antrean.xlsx` | kolom `url`, `durasi_detik`, `status` — satu baris satu link |
+| `akun.xlsx` | kolom `nama`, `aktif` (ya/tidak), `status_sesi`, `proxy`, `catatan` |
+
+- Kedua file **ditulis ulang otomatis** setiap antrean atau daftar akun berubah, jadi kamu bisa
+  membukanya di Excel kapan saja untuk melihat keadaan sebenarnya.
+- Tombol **Simpan ke Excel** / **Simpan akun ke Excel** menulis paksa; **Impor dari Excel**
+  membaca file itu kembali.
+- Impor antrean bersifat **menambah**; centang **Ganti antrean lama** kalau mau menimpanya.
+  Link non-Facebook ditolak, duplikat dilewati — jumlahnya dilaporkan.
+- Impor akun menambahkan akun baru dan melewati nama yang sudah ada. **Sesi tetap harus Login
+  manual**; impor tidak bisa memindahkan cookie antar mesin.
+- Kolom dicocokkan longgar (huruf besar/kecil dan spasi tidak masalah), jadi menambah kolom
+  catatan sendiri di Excel tidak merusak impor.
+- Lokasi bisa dipaksa lewat env `FAW_IO_DIR`.
+
 ## Isi repo
 
 | Path | Fungsi |
 |---|---|
-| `app/db.py` | SQLite (WAL): accounts, queue_items, jobs, logs, settings + pemulihan job terputus |
+| `app/db.py` | SQLite (WAL): accounts, queue_items, jobs (dengan kolom `round`), logs, settings |
 | `app/crypto.py` | Enkripsi/dekripsi sesi pakai DPAPI Windows |
-| `app/runner.py` | Worker per akun + orkestrator (claim, retry, split, pause/stop) |
+| `app/runner.py` | Worker per akun + orkestrator: claim, retry, split, looping, pause/stop |
 | `app/gui.py` | Backend pywebview (API untuk UI) + semua aksi |
+| `app/io_paths.py` | Lokasi folder `io/` di folder project |
+| `app/xlsxio.py` | Baca/tulis `.xlsx` (openpyxl) |
 | `app/static/index.html` | UI (tabel antrean drag-drop, dashboard worker, log live) |
 | `app/cli.py` | CLI: login, run, check, add-links, download |
 | `app/downloader.py` | Validasi/normalisasi link + penamaan file unduhan |
-| `tests/smoke.py` | Tes unit + integrasi nyata (Chrome + video lokal + auto-scroll) |
-| `tests/ui_boot.py` | Tes UI end-to-end: window pywebview sungguhan, cek bridge JS↔Python |
+| `tests/*.py` | 7 suite: unit, sesi, paralel, multi-akun, unduhan, UI, loop+Excel |
 
 Arsitektur: **satu proses**, satu thread Worker per akun, masing-masing menyalakan Playwright
 sync sendiri dan meluncurkan Chrome sistem. Alasan Chrome sistem: Chromium bundled Playwright
@@ -78,12 +118,13 @@ menjatuhkan worker lain, dan tidak ada proses terpisah yang perlu di-reap saat a
 ## Menjalankan tes
 
 ```
-py -3.12 tests/smoke.py       # unit + browser nyata; cetak OK/FAIL per aspek
-py -3.12 tests/session.py     # login/sesi: deteksi login telat render, simpan+pulihkan cookie
-py -3.12 tests/parallel.py    # 3 worker paralel nyata: mode all/split, batas worker, item rusak
+py -3.12 tests/smoke.py        # unit + browser nyata; cetak OK/FAIL per aspek
+py -3.12 tests/session.py      # login/sesi: deteksi login telat render, simpan+pulihkan cookie
+py -3.12 tests/parallel.py     # 3 worker paralel nyata: mode all/split, batas worker, item rusak
 py -3.12 tests/multi_account.py # N akun = N proses Chrome, cookie tidak bocor antar akun
-py -3.12 tests/downloader.py  # pengunduh: server lokal + video uji, cek file hasil
-py -3.12 tests/ui_boot.py     # buka window GUI sungguhan, verifikasi bridge JS↔Python
+py -3.12 tests/downloader.py   # pengunduh: server lokal + video uji, cek file hasil
+py -3.12 tests/loop.py         # looping (2 putaran, batas, urutan) + impor/ekspor Excel
+py -3.12 tests/ui_boot.py      # buka window GUI sungguhan, verifikasi bridge JS↔Python
 ```
 
 ## Sesi tidak tersimpan / minta login berulang?

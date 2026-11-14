@@ -235,6 +235,8 @@ def test_real_browser(db):
     class FakeOrch:
         stopping = False
         db = _db
+        round = 1
+
         def is_running(self):
             return True
         def is_drained(self):
