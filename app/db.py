@@ -80,10 +80,31 @@ class DB:
         self.c.execute("PRAGMA synchronous=NORMAL")
         self.c.executescript(SCHEMA)
         self.c.commit()
+        self._migrate()
         for k, v in DEFAULTS.items():
             self.c.execute("INSERT OR IGNORE INTO settings(k,v) VALUES(?,?)", (k, json.dumps(v)))
         self.c.commit()
         self._writes = 0
+
+    # ---------- migrasi skema ----------
+    def _migrate(self):
+        """Tambah kolom yang belum ada di DB lama.
+
+        `CREATE TABLE IF NOT EXISTS` TIDAK menambah kolom ke tabel yang sudah ada, jadi
+        database dari versi sebelumnya kehilangan kolom baru dan query langsung meledak
+        (gejala: 'no such column: round' -> worker mati -> jendela browser menutup).
+        """
+        want = {
+            "jobs": {"round": "INTEGER NOT NULL DEFAULT 1"},
+        }
+        for table, cols in want.items():
+            have = {r["name"] for r in self.c.execute(f"PRAGMA table_info({table})").fetchall()}
+            if not have:
+                continue          # tabel belum dibuat, skema baru sudah menanganinya
+            for col, decl in cols.items():
+                if col not in have:
+                    self.c.execute(f"ALTER TABLE {table} ADD COLUMN {col} {decl}")
+        self.c.commit()
 
     # ---------- settings ----------
     def settings(self):
