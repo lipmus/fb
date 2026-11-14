@@ -102,8 +102,10 @@ Penyebab tersering, berurutan:
 - **Jendela login ditutup terlalu cepat.** App butuh ±6 detik setelah submit + tulis file.
   Tunggu sampai kartu akun berubah jadi `aktif`; log akan berbunyi
   "Login berhasil; sesi disimpan & terverifikasi (N cookie)".
-- **Facebook minta verifikasi (checkpoint/2FA).** Selesaikan di jendela browser. Status
-  tetap `belum login` sampai selesai — ini disengaja, tidak ada bypass.
+- **Facebook minta verifikasi (checkpoint/2FA/CAPTCHA).** Status akun jadi `butuh verifikasi`
+  dan **jendela Chrome dibiarkan terbuka** — selesaikan verifikasi di jendela itu. Aplikasi
+  menunggu (sampai 30 menit) lalu menyimpan sesi otomatis. Tidak ada bypass CAPTCHA.
+  Kalau jendela itu ditutup sebelum selesai, status kembali `belum login`.
 - **Login lewat akun yang tidak punya hak.** Sesi tersimpan tapi halaman video menolak.
 - **Hapus akun** ikut menghapus file sesinya (`sessions\account_<id>.enc`).
 

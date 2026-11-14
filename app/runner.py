@@ -32,6 +32,27 @@ CHECKPOINT_HINTS = [
     "/privacy/consent",
     "confirmemail",
     "challenge",
+    "captcha",
+]
+# teks penanda halaman verifikasi/CAPTCHA. Halaman begini kecil dan teksnya di atas,
+# jadi hanya diperiksa kalau halaman memang pendek (lihat needs_verification).
+VERIFY_TEXTS = [
+    "security check",
+    "keamanan",
+    "captcha",
+    "confirm your identity",
+    "konfirmasi identitas",
+    "we need to confirm",
+    "kita perlu mengonfirmasi",
+    "unusual activity",
+    "aktivitas tidak biasa",
+    "your session has expired",
+    "sesi anda berakhir",
+    "two-factor",
+    "login code",
+    "kode masuk",
+    "masukkan kode",
+    "enter the code",
 ]
 VIDEO_SELECTORS = ["video[src]", "video"]
 BAD_PAGE_HINTS = [
@@ -133,11 +154,38 @@ def dismiss_cookie_wall(page):
     return False
 
 
+def needs_verification(page):
+    """Halaman verifikasi/CAPTCHA/2FA.
+
+    Ini penyebab jendela login menutup sendiri: halaman checkpoint di-serve pada URL '/'
+    tanpa form login, jadi cek 'sudah login?' menjawab YA dan browser langsung ditutup.
+    """
+    if page is None:
+        return False
+    url = (page.url or "").lower()
+    if any(h in url for h in CHECKPOINT_HINTS):
+        return True
+    try:
+        if page.query_selector("input[name='approvals_code'], input[autocomplete='one-time-code'], "
+                               "#approvals_code, [name='captcha_response'], "
+                               "#captcha, iframe[src*='captcha'], img[src*='captcha']"):
+            return True
+    except Exception:
+        pass
+    # teks hanya diperiksa di halaman yang pendek, supaya kata 'keamanan' di feed
+    # atau di komentar video tidak salah dianggap halaman verifikasi
+    try:
+        body = (page.inner_text("body") or "").strip()
+    except Exception:
+        return False
+    if len(body) > 6000:
+        return False
+    low = body.lower()
+    return any(t in low for t in VERIFY_TEXTS)
+
+
 def is_login_form(page):
     """Ada form login di halaman -> belum login.
-
-    Dulu cek ini tidak ada dan hanya URL yang diperiksa: halaman facebook.com/login
-    memakai URL '/', jadi login dianggap 'sudah selesai' dan sesi KOSONG tersimpan.
     """
     try:
         if page.query_selector("input[name='pass'], input[name='email']"):
@@ -153,7 +201,7 @@ def is_login_form(page):
 
 
 def _looks_logged_in(page):
-    """True hanya kalau URL bersih DAN tidak ada form login di DOM."""
+    """True hanya kalau URL bersih, tidak ada form login, dan tidak ada halaman verifikasi."""
     if page is None:
         return False
     url = (page.url or "").lower()
@@ -162,6 +210,8 @@ def _looks_logged_in(page):
     if any(k in url for k in ("/login", "/r.php", "login.php")):
         return False
     if is_login_form(page):
+        return False
+    if needs_verification(page):
         return False
     # halaman login FB kadang memakai URL '/', jadi DOM adalah penentu utama
     try:
@@ -193,7 +243,9 @@ def blocked_by_login(page):
         return True
     if any(k in url for k in ("/login", "/r.php", "login.php")):
         return True
-    return is_login_form(page)
+    if is_login_form(page):
+        return True
+    return needs_verification(page)
 
 
 FB_HOME = "https://www.facebook.com/?sk=welcome"
@@ -225,6 +277,11 @@ def check_session(page, db, aid, retries=3):
         if _looks_logged_in(page):
             db.update_account(aid, status="active", last_error="")
             return True
+        if needs_verification(page):
+            db.update_account(aid, status="needs_verification",
+                              last_error="FB meminta verifikasi/CAPTCHA")
+            db.log("Cek sesi: FB meminta verifikasi/CAPTCHA", aid, level="warn")
+            return False
         last = "belum login / form login muncul"
         time.sleep(2 + i * 2)
     db.update_account(aid, status="needs_login", last_error=last or "belum login")

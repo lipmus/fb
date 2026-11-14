@@ -135,6 +135,7 @@ td input.dur{width:70px;padding:3px 6px;text-align:right}
     </section>
 
     <section id="tab-acc">
+      <div id="acc-warn"></div>
       <div class="card">
         <h2>Tambah akun</h2>
         <div class="row">
@@ -304,8 +305,8 @@ function modal(title, text, onYes){
 const stBadge = s => `<span class="badge ${esc(s)}">${({
   done:'selesai', running:'berjalan', failed:'gagal', waiting:'menunggu',
   partial:'sebagian', skipped:'dilewati', active:'aktif', needs_login:'belum login',
-  error:'error'}[s] || s)}</span>`;
-const stDot = s => s==='active'?'ok':s==='needs_login'?'warn':s==='error'?'err':'warn';
+  needs_verification:'butuh verifikasi', error:'error'}[s] || s)}</span>`;
+const stDot = s => s==='active'?'ok':s==='needs_verification'?'err':s==='needs_login'?'warn':s==='error'?'err':'warn';
 const mmss = s => { s=Math.max(0,Math.round(s||0)); return `${Math.floor(s/60)}:${String(s%60).padStart(2,'0')}`; };
 
 /* ---------------- tabs ---------------- */
@@ -319,7 +320,7 @@ async function poll(){
   try{
     S.status = await call('status');
     S.accounts = S.status.accounts || [];
-    renderTop(); renderRequirements_check(); renderWorkers(); renderAccounts();
+    renderTop(); renderWorkers(); renderAccounts();
     renderQueueStatusOnly();
     if($('#tab-log').classList.contains('on') && $('#lg-live').checked) loadLogs(true);
   }catch(e){ /* bridge belum siap */ }
@@ -340,8 +341,8 @@ function renderTop(){
   $('#gram').textContent = s.ram_mb ? s.ram_mb + ' MB' : '';
   $('#b-start').disabled = !!s.running;
   $('#b-pause').disabled = !s.running; $('#b-stop').disabled = !s.running;
+  renderAccounts();
 }
-function renderRequirements_check(){}
 function renderWorkers(){
   const w = S.status.workers || [];
   $('#workers').innerHTML = w.length ? w.map(x=>{
@@ -375,6 +376,11 @@ async function loadLogs(silent){
 /* ---------------- accounts ---------------- */
 function renderAccounts(){
   const busy = (S.status.busy_login||[]);
+  const needv = (S.accounts||[]).filter(a => a.status === 'needs_verification');
+  $('#acc-warn').innerHTML = needv.length ? `<div class="warnbox">
+    Menunggu verifikasi/CAPTCHA: <b>${needv.map(a=>esc(a.name)).join(', ')}</b>.
+    Jendela Chrome-nya masih terbuka &mdash; selesaikan verifikasi di jendela itu.
+    Aplikasi tidak menutupnya; sesi tersimpan otomatis begitu selesai.</div>` : '';
   $('#acc-body').innerHTML = (S.accounts||[]).map(a=>`<tr>
     <td><input type="checkbox" ${a.enabled?'checked':''} onchange="setAcc(${a.id},{enabled:this.checked})"></td>
     <td><input value="${esc(a.name)}" style="width:150px" onchange="setAcc(${a.id},{name:this.value})"></td>

@@ -17,7 +17,8 @@ from .crypto import load as sess_load, save as sess_save
 from .downloader import dest_path, is_fb_video_url, normalize, video_id
 from .paths import data_dir, db_path, session_path
 from .runner import (FB_HOME, FB_HOSTS, Orchestrator, _looks_logged_in, check_session,
-                     dismiss_cookie_wall, gotoC, has_session_cookie, launch)
+                     dismiss_cookie_wall, gotoC, has_session_cookie, launch,
+                     needs_verification)
 from .db import DB
 
 STATIC = Path(__file__).parent / "static"
@@ -29,6 +30,7 @@ class Api:
         self.orch = Orchestrator(self.db)
         self.busy = set()          # akun yang sedang proses login (worker manual)
         self._dl = {}
+        self._window = None        # diisi run(); dipakai login flow untuk tahu app masih hidup
         self.recovered = self.db.recover()
         if self.recovered:
             self.db.log(f"Pemulihan: {self.recovered} job terputus dikembalikan ke antrean", level="warn")
@@ -124,6 +126,7 @@ class Api:
     def _login_flow(self, aid, headless, settings):
         from playwright.sync_api import sync_playwright
         acc = self.db.account(aid)
+        win = self._window  # atribut privat: pywebview tidak boleh mengenumerasi window ke JS
         try:
             with sync_playwright() as pw:
                 b = pw.chromium.launch(channel="chrome", headless=headless,
@@ -131,35 +134,55 @@ class Api:
                                              "--no-first-run", "--no-default-browser-check"])
                 ctx = launch(b, acc, settings, None)
                 page = ctx.new_page()
-                print(f"[login] akun #{aid} siap dibuat")
-                # ?sk=welcome memaksa render ulang status login (halaman / sering di-cache
-                # dan terlihat seperti sudah login walau belum)
+                page.set_default_timeout(30000)
+                print(f"[login] akun #{aid} jendela Chrome dibuka")
+
+                def app_alive():
+                    """False kalau jendela aplikasi ditutup user - jangan tinggalkan Chrome yatim."""
+                    if win is None:
+                        return True
+                    try:
+                        return callable(getattr(win, "evaluate_js", None))
+                    except Exception:
+                        try:
+                            return getattr(win, "native", None) is not None
+                        except Exception:
+                            return True
+
                 gotoC(page, FB_HOME)
                 ok = False
-                end = time.time() + 900
+                end = time.time() + 1800
                 streak = 0
                 warned = False
                 while time.time() < end:
                     try:
-                        if page.is_closed():
+                        if page.is_closed() or not app_alive():
                             break
                     except Exception:
                         break
                     if _looks_logged_in(page):
-                        # butuh 3 cek berturut-turut: transisi setelah submit form sempat
-                        # terbaca 'login' sekejap sebelum redirect selesai
+                        # butuh 3 cek berturut-turut: sesaat setelah submit form halaman
+                        # sempat terlihat 'login' sebelum redirect selesai
                         streak += 1
                         if streak >= 3:
                             ok = True
                             break
                     else:
                         streak = 0
-                        if not warned and "checkpoint" in (page.url or "").lower():
-                            warned = True
-                            self.db.log("FB meminta verifikasi (checkpoint). Selesaikan di jendela "
-                                        "browser; sesi akan disimpan setelah selesai.", aid,
-                                        level="warn")
+                        if needs_verification(page):
+                            if not warned:
+                                warned = True
+                                self.db.update_account(aid, status="needs_verification",
+                                                       last_error="Menunggu verifikasi/CAPTCHA diselesaikan")
+                                self.db.log("FB meminta verifikasi/CAPTCHA. SELESAIKAN di jendela "
+                                            "browser itu - aplikasi tidak menutup jendela, tunggu "
+                                            "sampai selesai. Sesi disimpan otomatis setelahnya.",
+                                            aid, level="warn")
+                            page.wait_for_timeout(1500)
+                            continue
                     page.wait_for_timeout(2000)
+                    if warned and time.time() > end - 1:
+                        break
                 if ok:
                     sess = ctx.storage_state()
                     names = [c.get("name") for c in sess.get("cookies", [])]
@@ -187,6 +210,11 @@ class Api:
                                                    last_error=f"gagal menulis sesi: {e}")
                             self.db.log(f"GAGAL menulis/membaca ulang sesi: {type(e).__name__}: {e}",
                                         aid, level="error")
+                elif warned:
+                    self.db.update_account(aid, status="needs_verification",
+                                           last_error="Verifikasi tidak selesai (waktu habis)")
+                    self.db.log("Verifikasi tidak selesai dalam 30 menit. Klik Login lagi kalau "
+                                "masih perlu.", aid, level="warn")
                 else:
                     self.db.update_account(aid, status="needs_login",
                                            last_error="login tidak terdeteksi selesai")
@@ -566,6 +594,7 @@ def run():
         (STATIC / "index.html").as_uri(),
         js_api=api, width=1420, height=920, min_size=(1100, 700),
     )
+    api._window = window
     # ponytail: hook khusus tes otomatis; tanpa env ini aplikasi jalan normal
     selftest = os.environ.get("FAW_SELFTEST_SECONDS")
     if selftest:

@@ -45,11 +45,20 @@ LOGIN_PAGE = """<html><body><div id="root"></div>
 
 FEED_PAGE = "<html><body><div>feed beranda</div><div role='feed'></div></body></html>"
 
+# halaman checkpoint: di-serve pada URL '/' (seperti FB), tanpa form login, berisi teks verifikasi
+CHECKPOINT_URL = "/"
+CHECKPOINT_PAGE = """<html><body><div id="root"><h1>Security check</h1>
+<p>We need to confirm it's you before continuing.</p>
+<form id="captcha"><input name="captcha_response" placeholder="Masukkan kode"><img src="/captcha.png"></form>
+</div></body></html>"""
+
 
 class H(BaseHTTPRequestHandler):
     def do_GET(self):
         if "/feed" in self.path:
             body, ctype = FEED_PAGE.encode(), "text/html"
+        elif self.path == CHECKPOINT_URL or self.path.startswith("/?checkpoint"):
+            body, ctype = CHECKPOINT_PAGE.encode(), "text/html"
         elif self.path.startswith("/welcome"):
             body, ctype = LOGIN_PAGE.encode(), "text/html"
         else:
@@ -82,8 +91,8 @@ def main():
     from app import crypto, runner as R
     from app.db import DB
     from app.paths import data_dir, session_path
-    from app.runner import (_looks_logged_in, has_session_cookie, is_login_form,
-                            launch, launch_browser)
+    from app.runner import (_looks_logged_in, blocked_by_login, has_session_cookie,
+                            is_login_form, launch, launch_browser, needs_verification)
 
     # tes memakai server lokal sebagai "facebook.com"
     R.FB_HOSTS = R.FB_HOSTS + ("127.0.0.1",)
@@ -105,6 +114,32 @@ def main():
         b, _ = launch_browser(pw, s)
         ctx = launch(b, acc, s, None)
         page = ctx.new_page()
+
+        print("\n== halaman checkpoint di URL '/' (penyebab Chrome nutup sendiri) ==")
+        cctx = launch(b, acc, s, None)     # context bersih, jangan kotori cookie tes lain
+        cpage = cctx.new_page()
+        cpage.goto(f"{base}/", wait_until="domcontentloaded")
+        cpage.wait_for_timeout(500)
+        url_only = not any(x in cpage.url.lower() for x in ("/login", "/r.php", "login.php"))
+        check("cek URL saja lolos di halaman checkpoint (bug lama)", url_only, cpage.url)
+        check("tidak ada form login di halaman itu (jadi cek form pun lolos)",
+              not is_login_form(cpage))
+        check("needs_verification mendeteksi halaman checkpoint", needs_verification(cpage))
+        check("_looks_logged_in menolaknya", not _looks_logged_in(cpage))
+        check("blocked_by_login menolaknya", blocked_by_login(cpage))
+        check("halaman ini masih di host FB -> host-only check tidak cukup",
+              any(h in cpage.url for h in ("127.0.0.1",)))
+        check("belum ada cookie c_user di titik ini (jadi sesi tidak akan tersimpan)",
+              not has_session_cookie(cctx.storage_state()))
+        cctx.close()
+
+        print("\n== CAPTCHA di halaman panjang tidak salah picu (feed normal) ==")
+        cctx = launch(b, acc, s, None)
+        cpage = cctx.new_page()
+        cpage.goto(f"{base}/feed", wait_until="domcontentloaded")
+        cpage.wait_for_timeout(400)
+        check("feed normal tidak dianggap verifikasi", not needs_verification(cpage))
+        cctx.close()
 
         print("\n== halaman login yang telat render (kondisi asli bug) ==")
         page.goto(f"{base}/welcome", wait_until="domcontentloaded")
