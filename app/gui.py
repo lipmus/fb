@@ -133,7 +133,7 @@ class Api:
     def _login_flow(self, aid, headless, settings):
         from playwright.sync_api import sync_playwright
         acc = self.db.account(aid)
-        win = self._window  # atribut privat: pywebview tidak boleh mengenumerasi window ke JS
+        win = self._window  # ponytail: tidak dipakai lagi; disimpan untuk debugging
         try:
             with sync_playwright() as pw:
                 b = pw.chromium.launch(channel="chrome", headless=headless,
@@ -144,18 +144,6 @@ class Api:
                 page.set_default_timeout(30000)
                 print(f"[login] akun #{aid} jendela Chrome dibuka")
 
-                def app_alive():
-                    """False kalau jendela aplikasi ditutup user - jangan tinggalkan Chrome yatim."""
-                    if win is None:
-                        return True
-                    try:
-                        return callable(getattr(win, "evaluate_js", None))
-                    except Exception:
-                        try:
-                            return getattr(win, "native", None) is not None
-                        except Exception:
-                            return True
-
                 gotoC(page, FB_HOME)
                 sess = None
                 names = []
@@ -165,7 +153,7 @@ class Api:
                 last_report = 0.0
                 while time.time() < end:
                     try:
-                        if page.is_closed() or not app_alive():
+                        if page.is_closed():
                             break
                     except Exception:
                         break
