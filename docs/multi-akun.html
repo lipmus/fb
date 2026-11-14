@@ -1,0 +1,54 @@
+<!DOCTYPE html>
+<html lang="id">
+<head><meta charset="utf-8"><style>
+  body{color:var(--foreground);font-family:inherit}
+  .wrap{display:flex;gap:26px;align-items:flex-start}
+  .col{display:flex;flex-direction:column;gap:8px}
+  .lbl{font-size:10px;letter-spacing:.08em;text-transform:uppercase;color:var(--muted-foreground)}
+  .box{border:1px solid var(--border);background:var(--card);border-radius:8px;padding:7px 11px;font-size:12px;white-space:nowrap}
+  .box b{font-weight:600}
+  .box .s{color:var(--muted-foreground);font-size:10.5px}
+  .app{border-color:var(--accent);border-width:1.5px}
+  .chrome{border-left:3px solid var(--accent)}
+  .arrow{align-self:center;color:var(--muted-foreground);font-size:15px;padding-top:34px}
+  .acct{border-style:dashed;font-size:11px}
+  .acct .s{display:block;color:var(--muted-foreground);font-size:10px}
+  .note{margin-top:12px;font-size:11.5px;color:var(--muted-foreground);max-width:640px;line-height:1.55}
+  code{background:var(--card);border:1px solid var(--border);border-radius:4px;padding:1px 4px;font-size:11px}
+</style></head>
+<body>
+<div class="wrap">
+  <div class="col">
+    <div class="lbl">1 proses aplikasi</div>
+    <div class="box app"><b>FacebookAutoWatch.exe</b><div class="s">UI + SQLite + orkestrator</div></div>
+  </div>
+  <div class="arrow">→</div>
+  <div class="col">
+    <div class="lbl">N thread worker</div>
+    <div class="box">Worker Akun1 <span class="s">· playwright #1</span></div>
+    <div class="box">Worker Akun2 <span class="s">· playwright #2</span></div>
+    <div class="box">Worker Akun3 <span class="s">· playwright #3</span></div>
+  </div>
+  <div class="arrow">→</div>
+  <div class="col">
+    <div class="lbl">N proses Chrome</div>
+    <div class="box chrome">chrome.exe <span class="s">pid 28596</span><div class="s">user-data-dir …6t0BFV</div></div>
+    <div class="box chrome">chrome.exe <span class="s">pid 28312</span><div class="s">user-data-dir …m1KHSo</div></div>
+    <div class="box chrome">chrome.exe <span class="s">pid …</span><div class="s">user-data-dir …</div></div>
+  </div>
+  <div class="arrow">→</div>
+  <div class="col">
+    <div class="lbl">N context + N cookie jar</div>
+    <div class="box acct">Akun1<b class="s">session_1.enc (DPAPI)</b></div>
+    <div class="box acct">Akun2<b class="s">session_2.enc (DPAPI)</b></div>
+    <div class="box acct">Akun3<b class="s">session_3.enc (DPAPI)</b></div>
+  </div>
+</div>
+<div class="note">
+  Satu akun = satu thread worker = satu proses Chrome sendiri = satu context dengan cookie jar sendiri.
+  Chrome dipakai lewat Playwright (<b>bukan profil Google kamu</b>) dengan <code>user-data-dir</code> sementara
+  yang dibuat otomatis dan unik per worker, lalu dibuang saat worker berhenti. Cookie akun tidak disimpan
+  di profil itu — ia disimpan terenkripsi per akun di <code>sessions\account_&lt;id&gt;.enc</code>,
+  dan dimuat ulang ke context saat worker mulai.
+</div>
+</body></html>

@@ -1,0 +1,568 @@
+<!DOCTYPE html>
+<html lang="id">
+<head>
+<meta charset="utf-8">
+<title>Facebook Auto Watch Manager</title>
+<style>
+:root{
+  --bg:#0f1115; --panel:#171a21; --panel2:#1e222b; --line:#2a2f3a;
+  --fg:#e6e9ef; --muted:#8b93a5; --acc:#4c8dff; --ok:#3ddc84; --warn:#ffb020;
+  --err:#ff5d5d; --run:#4c8dff;
+}
+*{box-sizing:border-box}
+body{margin:0;background:var(--bg);color:var(--fg);font:13px/1.45 "Segoe UI",system-ui,sans-serif}
+button{font:inherit;color:var(--fg);background:var(--panel2);border:1px solid var(--line);
+  border-radius:6px;padding:6px 11px;cursor:pointer}
+button:hover{background:#252a34;border-color:#39404e}
+button.primary{background:var(--acc);border-color:var(--acc);color:#06101f;font-weight:600}
+button.danger{background:#3a1c1c;border-color:#5b2a2a;color:#ffb3b3}
+button.ghost{background:transparent}
+button:disabled{opacity:.45;cursor:not-allowed}
+input,select,textarea{font:inherit;color:var(--fg);background:#0c0e13;border:1px solid var(--line);
+  border-radius:6px;padding:6px 8px}
+input:focus,textarea:focus,select:focus{outline:none;border-color:var(--acc)}
+textarea{width:100%;resize:vertical;font-family:Consolas,monospace;font-size:12px}
+#app{display:grid;grid-template-columns:190px 1fr;height:100vh}
+nav{background:var(--panel);border-right:1px solid var(--line);padding:14px 0;display:flex;
+  flex-direction:column;gap:2px}
+nav h1{font-size:13px;margin:0 14px 12px;color:var(--muted);letter-spacing:.4px;text-transform:uppercase}
+nav a{padding:9px 16px;cursor:pointer;color:var(--muted);border-left:3px solid transparent}
+nav a:hover{color:var(--fg);background:#1c2029}
+nav a.on{color:var(--fg);border-left-color:var(--acc);background:#1c2029}
+nav .foot{margin-top:auto;padding:12px 16px;color:var(--muted);font-size:11px;line-height:1.6}
+main{overflow:auto;padding:16px 20px 40px}
+header.top{display:flex;align-items:center;gap:10px;margin-bottom:14px;flex-wrap:wrap}
+header.top .spacer{flex:1}
+.pill{display:inline-flex;align-items:center;gap:6px;padding:4px 10px;border-radius:99px;
+  background:var(--panel2);border:1px solid var(--line);color:var(--muted);font-size:12px}
+.pill b{color:var(--fg);font-weight:600}
+.dot{width:8px;height:8px;border-radius:99px;background:var(--muted)}
+.dot.run{background:var(--run);animation:p 1.2s infinite}
+.dot.ok{background:var(--ok)} .dot.warn{background:var(--warn)} .dot.err{background:var(--err)}
+@keyframes p{50%{opacity:.25}}
+section{display:none} section.on{display:block}
+.card{background:var(--panel);border:1px solid var(--line);border-radius:10px;padding:14px;margin-bottom:14px}
+.card h2{margin:0 0 10px;font-size:13px;color:var(--muted);text-transform:uppercase;letter-spacing:.4px}
+.grid{display:grid;gap:12px}
+.g4{grid-template-columns:repeat(auto-fit,minmax(180px,1fr))}
+.kpi{background:var(--panel);border:1px solid var(--line);border-radius:10px;padding:12px 14px}
+.kpi .n{font-size:24px;font-weight:600} .kpi .l{color:var(--muted);font-size:11px;text-transform:uppercase}
+table{width:100%;border-collapse:collapse;font-size:12.5px}
+th,td{text-align:left;padding:7px 8px;border-bottom:1px solid var(--line);vertical-align:middle}
+th{color:var(--muted);font-weight:600;font-size:11px;text-transform:uppercase;letter-spacing:.3px;
+  position:sticky;top:0;background:var(--panel);z-index:2}
+tr.drag{opacity:.4}
+tr.over td{border-top:2px solid var(--acc)}
+td.url{max-width:420px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+td.url a{color:#9dc0ff;text-decoration:none}
+td input.dur{width:70px;padding:3px 6px;text-align:right}
+.badge{padding:2px 8px;border-radius:99px;font-size:11px;border:1px solid var(--line);background:var(--panel2)}
+.badge.done{color:var(--ok);border-color:#255c3c;background:#122318}
+.badge.running{color:#9dc0ff;border-color:#2a4a7a;background:#111c2e}
+.badge.failed{color:var(--err);border-color:#5b2a2a;background:#241314}
+.badge.partial{color:var(--warn);border-color:#5c4a20;background:#241f12}
+.badge.waiting{color:var(--muted)}
+.badge.skipped{color:var(--muted);text-decoration:line-through}
+.bar{height:5px;background:#0c0e13;border-radius:99px;overflow:hidden;margin-top:5px}
+.bar i{display:block;height:100%;background:var(--acc);transition:width .3s}
+.row{display:flex;gap:10px;align-items:center;flex-wrap:wrap}
+.row label{color:var(--muted);font-size:12px}
+.wk{background:var(--panel);border:1px solid var(--line);border-radius:10px;padding:12px}
+.wk .t{display:flex;justify-content:space-between;gap:8px;align-items:center}
+.wk .u{color:var(--muted);font-size:11px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;margin-top:6px}
+.wk .e{color:var(--err);font-size:11px;margin-top:4px}
+.log{font-family:Consolas,monospace;font-size:11.5px;max-height:60vh;overflow:auto;
+  background:#0c0e13;border:1px solid var(--line);border-radius:8px;padding:8px}
+.log div{padding:1px 0;border-bottom:1px solid #161a21;white-space:pre-wrap}
+.log .error{color:var(--err)} .log .warn{color:var(--warn)} .log .info{color:var(--fg)}
+.log .time{color:var(--muted)} .log .acc{color:#9dc0ff}
+#toast{position:fixed;right:16px;bottom:16px;display:flex;flex-direction:column;gap:8px;z-index:50}
+.toast{background:var(--panel2);border:1px solid var(--line);border-left:3px solid var(--acc);
+  border-radius:8px;padding:10px 14px;max-width:420px;box-shadow:0 8px 24px rgba(0,0,0,.4)}
+.toast.err{border-left-color:var(--err)} .toast.ok{border-left-color:var(--ok)}
+#modal{position:fixed;inset:0;background:rgba(0,0,0,.6);display:none;align-items:center;
+  justify-content:center;z-index:60}
+#modal.on{display:flex}
+#modal .box{background:var(--panel);border:1px solid var(--line);border-radius:12px;padding:18px;
+  width:min(520px,92vw)}
+#modal h3{margin:0 0 8px;font-size:15px} #modal p{color:var(--muted);margin:0 0 14px}
+.hint{color:var(--muted);font-size:11.5px}
+.warnbox{background:#241f12;border:1px solid #5c4a20;color:#ffd58a;border-radius:8px;
+  padding:10px 12px;font-size:12px;margin-bottom:12px}
+.flexcol{display:flex;flex-direction:column;gap:10px}
+.split2{display:grid;grid-template-columns:1fr 1fr;gap:14px}
+@media(max-width:1100px){.split2{grid-template-columns:1fr}}
+</style>
+</head>
+<body>
+<div id="app">
+  <nav>
+    <h1>Auto Watch</h1>
+    <a data-tab="dash" class="on">Dashboard</a>
+    <a data-tab="acc">Akun</a>
+    <a data-tab="queue">Antrean</a>
+    <a data-tab="dl">Pengunduh</a>
+    <a data-tab="log">Log</a>
+    <a data-tab="set">Pengaturan</a>
+    <div class="foot">v<span id="ver">1.0</span><br><span id="dirdisp"></span></div>
+  </nav>
+  <main>
+    <header class="top">
+      <span class="pill"><span id="gdot" class="dot"></span><span id="gstate">Idle</span></span>
+      <span class="pill">Item <b id="gitem">0/0</b></span>
+      <span class="pill">Akun aktif <b id="gacc">0</b></span>
+      <span class="pill" id="gram-pill">RAM <b id="gram">-</b></span>
+      <span class="spacer"></span>
+      <button id="b-start" class="primary">Mulai</button>
+      <button id="b-pause">Jeda</button>
+      <button id="b-stop" class="danger">Stop</button>
+    </header>
+
+    <section id="tab-dash" class="on">
+      <div class="warnbox">
+        Gunakan hanya untuk akun milik sendiri. Otomasi akun melanggar Ketentuan Layanan Meta
+        (bisa checkpoint / blokir). Tidak ada bypass CAPTCHA di aplikasi ini &mdash; verifikasi akan
+        menghentikan akun tersebut sampai login ulang.
+      </div>
+      <div class="grid g4" style="margin-bottom:14px">
+        <div class="kpi"><div class="n" id="k-acc">0</div><div class="l">Akun aktif</div></div>
+        <div class="kpi"><div class="n" id="k-done">0</div><div class="l">Item selesai</div></div>
+        <div class="kpi"><div class="n" id="k-fail">0</div><div class="l">Item gagal/sebagian</div></div>
+        <div class="kpi"><div class="n" id="k-total">0</div><div class="l">Total antrean</div></div>
+      </div>
+      <div class="card"><h2>Worker per akun</h2><div class="grid g4" id="workers"></div></div>
+      <div class="card"><h2>Log terbaru</h2><div class="log" id="dash-log"></div></div>
+    </section>
+
+    <section id="tab-acc">
+      <div class="card">
+        <h2>Tambah akun</h2>
+        <div class="row">
+          <input id="acc-name" placeholder="Nama akun (mis. Akun 1)" style="width:260px">
+          <button class="primary" id="b-addacc">Tambah</button>
+          <span class="hint">Setelah ditambah, klik <b>Login</b> &mdash; jendela browser terbuka,
+          login manual di situ. Password tidak pernah disimpan.</span>
+        </div>
+      </div>
+      <div class="card">
+        <h2>Daftar akun</h2>
+        <table><thead><tr><th style="width:44px">Jalan</th><th>Nama</th><th>Status sesi</th>
+        <th>Proxy</th><th>Catatan</th><th style="width:260px">Aksi</th></tr></thead>
+        <tbody id="acc-body"></tbody></table>
+        <div class="hint" style="margin-top:8px">Sesi disimpan terenkripsi dengan kunci Windows (DPAPI)
+        di folder data aplikasi. Log tidak memuat cookie/token.</div>
+      </div>
+    </section>
+
+    <section id="tab-queue">
+      <div class="card">
+        <h2>Tambah link</h2>
+        <textarea id="q-paste" rows="5" placeholder="https://www.facebook.com/watch?v=...&#10;https://www.facebook.com/reel/...&#10;satu link per baris"></textarea>
+        <div class="row" style="margin-top:8px">
+          <button class="primary" id="b-addlinks">Tambah ke antrean</button>
+          <button id="b-import">Impor file CSV/TXT</button>
+          <button id="b-export">Ekspor CSV</button>
+          <span class="hint" id="q-msg"></span>
+        </div>
+      </div>
+      <div class="card">
+        <h2>Antrean</h2>
+        <div class="row" style="margin-bottom:10px">
+          <label><input type="checkbox" id="q-all"> pilih semua</label>
+          <input id="q-bdur" type="number" min="0" placeholder="durasi detik" style="width:130px">
+          <button id="b-bulk">Terapkan ke terpilih</button>
+          <span class="hint">atau</span>
+          <input id="q-blo" type="number" min="0" placeholder="min" style="width:80px">
+          <input id="q-bhi" type="number" min="0" placeholder="maks" style="width:80px">
+          <button id="b-bulkrange">Rentang acak</button>
+          <span class="spacer" style="flex:1"></span>
+          <button id="b-shuffle">Acak urutan</button>
+          <button id="b-reset">Reset status</button>
+          <button id="b-cleardone">Bersihkan selesai</button>
+          <button class="danger" id="b-clear">Kosongkan</button>
+        </div>
+        <table><thead><tr>
+          <th style="width:28px"></th><th style="width:34px">#</th><th style="width:28px"></th>
+          <th>Link</th><th style="width:96px">Durasi (d)</th><th style="width:110px">Status</th>
+          <th style="width:60px">Coba</th><th style="width:150px">Hasil per akun</th>
+          <th style="width:50px"></th></tr></thead>
+          <tbody id="q-body"></tbody></table>
+        <div class="hint" style="margin-top:8px">Drag baris untuk ubah urutan. Durasi kosong = pakai
+        durasi default. Durasi 0 detik diisi min=maks saat diisi lewat rentang.</div>
+      </div>
+    </section>
+
+    <section id="tab-dl">
+      <div class="card">
+        <h2>Unduh video</h2>
+        <div class="hint" style="margin-bottom:8px">Mengunduh memakai sesi akun yang sudah login
+        (cookie dipakai apa adanya oleh browser). Gunakan hanya untuk video yang boleh kamu simpan.</div>
+        <div class="row" style="margin-bottom:8px">
+          <label>Akun</label><select id="dl-acc"></select>
+          <label>Folder</label>
+          <input id="dl-dir" style="width:420px" placeholder="C:\\Users\\...\\Downloads">
+          <button class="primary" id="b-dl">Unduh</button>
+          <button id="b-dl-stop">Stop</button>
+        </div>
+        <textarea id="dl-paste" rows="5" placeholder="satu link per baris"></textarea>
+        <div class="hint" id="dl-msg" style="margin-top:8px"></div>
+        <div id="dl-list" style="margin-top:10px"></div>
+      </div>
+    </section>
+
+    <section id="tab-log">
+      <div class="card">
+        <h2>Log aktivitas</h2>
+        <div class="row" style="margin-bottom:10px">
+          <label>Akun</label><select id="lg-acc"></select>
+          <label>Level</label>
+          <select id="lg-level"><option value="">semua</option><option>info</option>
+            <option>warn</option><option>error</option></select>
+          <button id="b-lg-refresh">Muat ulang</button>
+          <label><input type="checkbox" id="lg-live" checked> auto-refresh</label>
+          <span class="spacer" style="flex:1"></span>
+          <button id="b-lg-export">Ekspor CSV</button>
+          <span class="hint" id="lg-msg"></span>
+        </div>
+        <div class="log" id="lg-body"></div>
+      </div>
+    </section>
+
+    <section id="tab-set">
+      <div class="split2">
+        <div class="card">
+          <h2>Jalan</h2>
+          <div class="flexcol">
+            <div class="row"><label style="width:170px">Durasi default (detik)</label>
+              <input id="s-dur" type="number" min="1" style="width:110px"></div>
+            <div class="row"><label style="width:170px">Auto-scroll</label>
+              <input type="checkbox" id="s-scroll"></div>
+            <div class="row"><label style="width:170px">Kecepatan scroll</label>
+              <select id="s-speed"><option value="slow">lambat</option><option value="medium">sedang</option>
+                <option value="fast">cepat</option></select></div>
+            <div class="row"><label style="width:170px">Maks worker paralel</label>
+              <input id="s-workers" type="number" min="1" max="20" style="width:110px"></div>
+            <div class="row"><label style="width:170px">Mode pembagian</label>
+              <select id="s-mode"><option value="all">semua akun putar seluruh antrean</option>
+                <option value="split">antrean dibagi rata antar akun</option></select></div>
+            <div class="row"><label style="width:170px">Retry maks per akun</label>
+              <input id="s-retry" type="number" min="0" max="10" style="width:110px"></div>
+            <div class="row"><label style="width:170px">Browser</label>
+              <select id="s-chan"><option value="auto">Chrome sistem (disarankan)</option>
+                <option value="chromium">Chromium bundled</option></select></div>
+            <div class="row"><label style="width:170px">Headless</label>
+              <input type="checkbox" id="s-head"></div>
+            <div class="row"><label style="width:170px">Bisukan audio</label>
+              <input type="checkbox" id="s-mute"></div>
+            <div class="row"><button class="primary" id="b-save">Simpan</button>
+              <span class="hint" id="s-msg"></span></div>
+          </div>
+        </div>
+        <div class="card">
+          <h2>Info</h2>
+          <div class="flexcol">
+            <div><div class="l hint">Folder data (db, sesi, log)</div><code id="i-dir"></code></div>
+            <div class="hint">Chromium bundled Playwright tidak punya codec H.264, jadi video Facebook
+              bisa tampil hitam. Pilihan <b>Chrome sistem</b> memakai Chrome yang sudah terpasang
+              sehingga video + audio jalan normal.</div>
+            <div class="hint">Kenapa Chrome sistem: profile Chrome user tidak disentuh &mdash; tiap akun
+              dapat browser context sendiri dan cookie-nya disimpan terenkripsi di folder data.</div>
+          </div>
+        </div>
+      </div>
+    </section>
+  </main>
+</div>
+<div id="toast"></div>
+<div id="modal"><div class="box"><h3 id="m-title"></h3><p id="m-text"></p>
+  <div class="row" style="justify-content:flex-end"><button id="m-no">Batal</button>
+  <button class="primary" id="m-yes">Ya, lanjut</button></div></div></div>
+
+<script>
+const $ = s => document.querySelector(s);
+const esc = s => String(s ?? '').replace(/[&<>"]/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c]));
+let S = {status:{}, settings:{}, queue:[], accounts:[], sel:new Set(), dl:null};
+
+function toast(msg, kind=''){
+  const d = document.createElement('div'); d.className = 'toast ' + kind; d.textContent = msg;
+  $('#toast').appendChild(d); setTimeout(()=>d.remove(), 4500);
+}
+function api(){ return (window.pywebview && window.pywebview.api) || null; }
+async function call(fn, ...args){
+  const a = api();
+  if(!a){ toast('Bridge UI belum siap (pywebview.api tidak ada). Buka lewat start.bat.', 'err'); throw new Error('no bridge'); }
+  try{ return await a[fn](...args); }
+  catch(e){ toast(`${fn}: ${e && e.message ? e.message : e}`, 'err'); throw e; }
+}
+function modal(title, text, onYes){
+  $('#m-title').textContent = title; $('#m-text').textContent = text;
+  $('#modal').classList.add('on');
+  const close = ok => { $('#modal').classList.remove('on');
+    $('#m-yes').onclick = null; $('#m-no').onclick = null; if(ok) onYes(); };
+  $('#m-yes').onclick = () => close(true); $('#m-no').onclick = () => close(false);
+}
+const stBadge = s => `<span class="badge ${esc(s)}">${({
+  done:'selesai', running:'berjalan', failed:'gagal', waiting:'menunggu',
+  partial:'sebagian', skipped:'dilewati', active:'aktif', needs_login:'belum login',
+  error:'error'}[s] || s)}</span>`;
+const stDot = s => s==='active'?'ok':s==='needs_login'?'warn':s==='error'?'err':'warn';
+const mmss = s => { s=Math.max(0,Math.round(s||0)); return `${Math.floor(s/60)}:${String(s%60).padStart(2,'0')}`; };
+
+/* ---------------- tabs ---------------- */
+document.querySelectorAll('nav a').forEach(a => a.onclick = () => {
+  document.querySelectorAll('nav a').forEach(x=>x.classList.toggle('on', x===a));
+  document.querySelectorAll('section').forEach(s=>s.classList.toggle('on', s.id==='tab-'+a.dataset.tab));
+});
+
+/* ---------------- status poll ---------------- */
+async function poll(){
+  try{
+    S.status = await call('status');
+    S.accounts = S.status.accounts || [];
+    renderTop(); renderRequirements_check(); renderWorkers(); renderAccounts();
+    renderQueueStatusOnly();
+    if($('#tab-log').classList.contains('on') && $('#lg-live').checked) loadLogs(true);
+  }catch(e){ /* bridge belum siap */ }
+  setTimeout(poll, 1000);
+}
+function renderTop(){
+  const s = S.status, w = (s.workers||[]);
+  const running = s.running && !s.stopping, busy = w.filter(x=>x.busy).length;
+  $('#gdot').className = 'dot ' + (running ? (busy?'run':'ok') : '');
+  $('#gstate').textContent = !s.running ? 'Idle' : s.stopping ? 'Berhenti...' :
+    (w.some(x=>x.paused) ? `Jalan (${busy} sibuk, ada jeda)` : `Jalan (${busy} sibuk)`);
+  $('#gitem').textContent = `${s.done||0}/${s.total||0}`;
+  $('#gacc').textContent = (s.accounts||[]).filter(a=>a.enabled).length;
+  $('#k-acc').textContent = (s.accounts||[]).filter(a=>a.enabled && a.status==='active').length;
+  $('#k-done').textContent = s.done||0; $('#k-fail').textContent = s.failed||0;
+  $('#k-total').textContent = s.total||0;
+  $('#gram-pill').style.display = s.ram_mb ? '' : 'none';
+  $('#gram').textContent = s.ram_mb ? s.ram_mb + ' MB' : '';
+  $('#b-start').disabled = !!s.running;
+  $('#b-pause').disabled = !s.running; $('#b-stop').disabled = !s.running;
+}
+function renderRequirements_check(){}
+function renderWorkers(){
+  const w = S.status.workers || [];
+  $('#workers').innerHTML = w.length ? w.map(x=>{
+    const pct = x.busy && x.remaining ? 100 : 0;
+    return `<div class="wk"><div class="t">
+      <span class="pill"><span class="dot ${x.paused?'warn':(x.busy?'run':'ok')}"></span>${esc(x.name)}</span>
+      ${stBadge(x.status)}
+      <span class="spacer" style="flex:1"></span>
+      <span class="hint">${x.busy?mmss(x.remaining):x.done?'selesai':'idle'}</span></div>
+      ${x.paused?`<div class="hint" style="margin-top:6px">Dijeda</div>`:''}
+      <div class="u" title="${esc(x.url)}">${esc(x.url || '—')}</div>
+      ${x.error?`<div class="e">${esc(x.error)}</div>`:''}
+      <div class="row" style="margin-top:8px"><button class="ghost" onclick="accAction(${x.id},'pause')">Jeda</button>
+      <button class="ghost" onclick="accAction(${x.id},'resume')">Lanjut</button>
+      <button class="ghost danger" onclick="accAction(${x.id},'stop')">Stop</button></div></div>`;
+  }).join('') : '<div class="hint">Belum ada worker aktif. Tekan Mulai setelah akun login &amp; antrean terisi.</div>';
+}
+async function loadLogs(silent){
+  const acc = $('#lg-acc').value, lv = $('#lg-level').value;
+  const r = await call('logs', acc?parseInt(acc):null, lv||null, 400);
+  const html = (r.logs||[]).map(l=>`<div class="${esc(l.level)}">
+    <span class="time">${l.time}</span> ${l.account?`<span class="acc">[${esc(l.account)}]</span>`:''}
+    ${l.item_id?`<span class="time">#${l.item_id}</span>`:''} ${esc(l.message)}</div>`).join('');
+  $('#lg-body').innerHTML = html || '<div class="hint">belum ada log</div>';
+  if($('#tab-dash').classList.contains('on')){
+    $('#dash-log').innerHTML = (r.logs||[]).slice(0,60).map(l=>`<div class="${esc(l.level)}">
+      <span class="time">${l.time}</span> ${l.account?`<span class="acc">[${esc(l.account)}]</span>`:''} ${esc(l.message)}</div>`).join('');
+  }
+}
+
+/* ---------------- accounts ---------------- */
+function renderAccounts(){
+  const busy = (S.status.busy_login||[]);
+  $('#acc-body').innerHTML = (S.accounts||[]).map(a=>`<tr>
+    <td><input type="checkbox" ${a.enabled?'checked':''} onchange="setAcc(${a.id},{enabled:this.checked})"></td>
+    <td><input value="${esc(a.name)}" style="width:150px" onchange="setAcc(${a.id},{name:this.value})"></td>
+    <td>${stBadge(a.status)}</td>
+    <td><input value="${esc(a.proxy||'')}" placeholder="opsional" style="width:160px"
+      onchange="setAcc(${a.id},{proxy:this.value})"></td>
+    <td class="hint" style="max-width:280px;overflow:hidden;text-overflow:ellipsis">${esc(a.last_error||'')}</td>
+    <td class="row" style="gap:6px">
+      <button class="primary" onclick="loginAcc(${a.id})" ${busy.includes(a.id)?'disabled':''}>
+        ${busy.includes(a.id)?'Menunggu login...':'Login'}</button>
+      <button onclick="call('check_account',${a.id}).then(r=>toast(r.message||'cek dijalankan'))">Cek sesi</button>
+      <button class="danger" onclick="delAcc(${a.id},'${esc(a.name)}')">Hapus</button>
+    </td></tr>`).join('') || '<tr><td colspan="6" class="hint">Belum ada akun.</td></tr>';
+  const opts = (S.accounts||[]).map(a=>`<option value="${a.id}">${esc(a.name)} (${esc(a.status)})</option>`).join('');
+  const dl = $('#dl-acc'), lg = $('#lg-acc');
+  dl.innerHTML = '<option value="">auto (akun pertama yang login)</option>' + opts;
+  const v = lg.value; lg.innerHTML = '<option value="">semua akun</option>' + opts; lg.value = v;
+}
+window.setAcc = (id, patch) => call('set_account', id, patch).then(()=>{});
+window.delAcc = (id, name) => modal('Hapus akun', `Hapus akun "${name}" beserta sesi dan riwayatnya?`, () =>
+  call('delete_account', id).then(r=>{ toast('Akun dihapus','ok'); }));
+window.loginAcc = id => modal('Login akun',
+  'Jendela Chrome akan terbuka. Login manual di jendela itu (termasuk 2FA kalau ada). '
+  + 'Sesi tersimpan otomatis begitu halaman Facebook terdeteksi sudah login. Jendela ini boleh ditutup '
+  + 'setelah selesai, atau dibiarkan - aplikasi tidak menyimpan password.',
+  () => call('login_account', id).then(r=> toast(r.message||r.error||'dibuka', r.ok?'ok':'err')));
+$('#b-addacc').onclick = () => {
+  const n = $('#acc-name').value.trim(); if(!n) return toast('Nama akun kosong','err');
+  call('add_account', n).then(r=>{ if(r.ok){ toast('Akun ditambah','ok'); $('#acc-name').value=''; } else toast(r.error,'err'); });
+};
+
+/* ---------------- queue ---------------- */
+function renderQueueStatusOnly(){
+  // update badge & hasil tanpa menyentuh input durasi yang sedang diedit
+  document.querySelectorAll('#q-body tr[data-id]').forEach(tr => {
+    const it = (S._qmap||{})[tr.dataset.id]; if(!it) return;
+    const b = tr.querySelector('.st'); if(b) b.innerHTML = stBadge(it.status);
+    const rt = tr.querySelector('.rt'); if(rt) rt.textContent = it.retries || 0;
+    const rs = tr.querySelector('.res');
+    if(rs) rs.innerHTML = (it.jobs||[]).map(j=>`<span class="badge ${esc(j.result)}" title="${esc(j.message||'')}">${esc(j.account)}</span>`).join(' ');
+  });
+}
+async function loadQueue(){
+  const r = await call('queue');
+  S.queue = r.items || []; S._qmap = {};
+  S.queue.forEach(i => S._qmap[i.id] = i);
+  $('#q-body').innerHTML = S.queue.map((it,i)=>`<tr data-id="${it.id}" draggable="true">
+    <td><input type="checkbox" class="ck" data-id="${it.id}" ${S.sel.has(it.id)?'checked':''}
+      onchange="window.selRow(${it.id}, this.checked)"></td>
+    <td class="hint">${i+1}</td>
+    <td style="cursor:grab;color:var(--muted)" title="drag untuk pindah">⠿</td>
+    <td class="url" title="${esc(it.url)}"><a href="${esc(it.url)}" target="_blank">${esc(it.url)}</a></td>
+    <td><input class="dur" type="number" min="0" value="${it.dur_min||''}" placeholder="${r.default_duration}"
+      onchange="window.setDur(${it.id}, this.value)"></td>
+    <td class="st">${stBadge(it.status)}</td>
+    <td class="rt">${it.retries||0}</td>
+    <td class="res">${(it.jobs||[]).map(j=>`<span class="badge ${esc(j.result)}" title="${esc(j.message||'')}">${esc(j.account)}</span>`).join(' ')}</td>
+    <td><button class="ghost" onclick="window.delItem(${it.id})">✕</button></td></tr>`).join('')
+    || '<tr><td colspan="9" class="hint">Antrean kosong.</td></tr>';
+  hookDrag();
+}
+window.selRow = (id, on) => { on ? S.sel.add(id) : S.sel.delete(id); };
+window.setDur = (id, v) => call('update_item', id, {dur: parseInt(v||'0')}).then(()=>loadQueue());
+window.delItem = id => call('delete_item', id).then(()=>{ S.sel.delete(id); loadQueue(); });
+function hookDrag(){
+  let src = null;
+  document.querySelectorAll('#q-body tr[data-id]').forEach(tr => {
+    tr.ondragstart = e => { src = tr; tr.classList.add('drag'); };
+    tr.ondragend = () => { tr.classList.remove('drag');
+      document.querySelectorAll('#q-body tr').forEach(x=>x.classList.remove('over')); };
+    tr.ondragover = e => { e.preventDefault();
+      document.querySelectorAll('#q-body tr').forEach(x=>x.classList.remove('over'));
+      if(tr !== src) tr.classList.add('over'); };
+    tr.ondrop = e => { e.preventDefault(); if(!src || src===tr) return;
+      const tbody = $('#q-body');
+      const rows = [...tbody.children];
+      const from = rows.indexOf(src), to = rows.indexOf(tr);
+      if(from < to) tr.after(src); else tr.before(src);
+      const ids = [...tbody.children].map(r=>parseInt(r.dataset.id));
+      call('reorder', ids).then(()=>loadQueue());
+    };
+  });
+  $('#q-all').onchange = e => {
+    document.querySelectorAll('#q-body .ck').forEach(c => { c.checked = e.target.checked;
+      window.selRow(parseInt(c.dataset.id), e.target.checked); });
+  };
+}
+$('#b-addlinks').onclick = () => call('add_links', $('#q-paste').value).then(r=>{
+  $('#q-msg').textContent = r.message || r.error || '';
+  if(r.ok){ $('#q-paste').value=''; toast(r.message,'ok'); loadQueue(); } else toast(r.error,'err');
+});
+$('#b-bulk').onclick = () => {
+  const d = parseInt($('#q-bdur').value || '0');
+  if(!S.sel.size) return toast('Pilih item dulu','err');
+  if(!d) return toast('Isi durasi','err');
+  call('bulk_duration', [...S.sel], d, null, null).then(r=>{ toast(`${r.count} item diubah`,'ok'); loadQueue(); });
+};
+$('#b-bulkrange').onclick = () => {
+  const lo = parseInt($('#q-blo').value||'0'), hi = parseInt($('#q-bhi').value||'0');
+  if(!S.sel.size) return toast('Pilih item dulu','err');
+  if(!lo || !hi) return toast('Isi min dan maks','err');
+  call('bulk_duration', [...S.sel], null, lo, hi).then(r=>{ toast(`${r.count} item diubah ke rentang`,'ok'); loadQueue(); });
+};
+$('#b-shuffle').onclick = () => call('shuffle').then(()=>loadQueue());
+$('#b-reset').onclick = () => call('reset_status').then(()=>{ toast('Status direset','ok'); loadQueue(); });
+$('#b-cleardone').onclick = () => modal('Bersihkan item selesai','Hapus semua item berstatus selesai/gagal/dilewati dari antrean?', () =>
+  call('clear_queue', true).then(r=>{ toast(`${r.count} item dibersihkan`,'ok'); loadQueue(); }));
+$('#b-clear').onclick = () => modal('Kosongkan antrean','Hapus SEMUA item antrean? Tindakan ini tidak bisa dibatalkan.', () =>
+  call('clear_queue').then(()=>{ toast('Antrean dikosongkan','ok'); loadQueue(); }));
+$('#b-export').onclick = () => call('export_queue','csv').then(r=>toast('Ekspor: '+r.path,'ok'));
+$('#b-import').onclick = () => {
+  const p = prompt('Path file CSV/TXT absolut:'); if(!p) return;
+  call('import_queue', p).then(r=>{ toast(r.message||r.error, r.ok?'ok':'err'); loadQueue(); });
+};
+
+/* ---------------- downloader ---------------- */
+$('#b-dl').onclick = () => {
+  const text = $('#dl-paste').value;
+  const acc = $('#dl-acc').value;
+  call('download_links', text, $('#dl-dir').value.trim(), acc?parseInt(acc):null, '')
+    .then(r => { if(!r.ok) return toast(r.error,'err');
+      S.dl = r.key; toast(`Mengunduh ${r.total} video ke ${r.outdir}`,'ok'); pollDl(); });
+};
+$('#b-dl-stop').onclick = () => S.dl && call('download_stop', S.dl).then(()=>toast('Stop diminta'));
+async function pollDl(){
+  if(!S.dl) return;
+  const p = await call('download_progress', S.dl);
+  $('#dl-msg').textContent = `${p.done||0}/${p.total||0} selesai${p.error?' - '+p.error:''}`;
+  $('#dl-list').innerHTML = (p.items||[]).map(i=>`<div class="row" style="border-bottom:1px solid var(--line);padding:6px 0">
+    <span class="badge ${i.status==='berhasil'?'done':'failed'}">${esc(i.status)}</span>
+    <span class="url" style="flex:1;max-width:520px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap"
+      title="${esc(i.url)}">${esc(i.url)}</span>
+    <span class="hint">${esc(i.message||'')}</span></div>`).join('');
+  if(p.finished){ toast('Pengunduhan selesai', p.error?'err':'ok'); S.dl=null; }
+  else setTimeout(pollDl, 1500);
+}
+
+/* ---------------- settings ---------------- */
+function fillSettings(){
+  const s = S.settings;
+  $('#s-dur').value = s.default_duration; $('#s-scroll').checked = !!s.scroll_enabled;
+  $('#s-speed').value = s.scroll_speed; $('#s-workers').value = s.max_workers;
+  $('#s-mode').value = s.mode; $('#s-retry').value = s.retry_max;
+  $('#s-chan').value = s.channel || 'auto';
+  $('#s-head').checked = !!s.headless; $('#s-mute').checked = !!s.mute;
+  $('#i-dir').textContent = s.data_dir; $('#dirdisp').textContent = 'data: ' + s.data_dir;
+  $('#ver').textContent = s.version;
+}
+$('#b-save').onclick = () => call('save_settings', {
+  default_duration: parseInt($('#s-dur').value||'60'),
+  scroll_enabled: $('#s-scroll').checked ? 1 : 0,
+  scroll_speed: $('#s-speed').value,
+  max_workers: parseInt($('#s-workers').value||'5'),
+  mode: $('#s-mode').value,
+  retry_max: parseInt($('#s-retry').value||'3'),
+  channel: $('#s-chan').value,
+  headless: $('#s-head').checked ? 1 : 0,
+  mute: $('#s-mute').checked ? 1 : 0,
+}).then(r => { S.settings = r.settings; toast('Pengaturan disimpan','ok');
+  $('#s-msg').textContent = 'tersimpan ' + new Date().toLocaleTimeString(); });
+$('#b-lg-refresh').onclick = () => loadLogs();
+$('#b-lg-export').onclick = () => {
+  const acc = $('#lg-acc').value;
+  call('export_logs', acc?parseInt(acc):null, $('#lg-level').value||null).then(r=>toast('Ekspor: '+r.path,'ok'));
+};
+
+/* ---------------- global controls ---------------- */
+$('#b-start').onclick = () => call('start').then(r=> toast(r.ok?r.message:r.error, r.ok?'ok':'err'));
+$('#b-pause').onclick = () => call('pause').then(r=>toast(r.message||r.error));
+$('#b-resume') && 0;
+$('#b-stop').onclick = () => modal('Stop semua worker','Hentikan semua worker sekarang? Item yang sedang berjalan akan ditandai interrupted dan dikerjakan ulang saat Mulai berikutnya.', () =>
+  call('stop').then(r=>toast(r.message||r.error)));
+window.accAction = (id, act) => call('account_action', id, act).then(r=>toast(r.message||r.error, r.ok?'':'err'));
+document.addEventListener('keydown', e => {
+  if(e.target.matches('input,textarea,select')) return;
+  if(e.key === ' ') { e.preventDefault(); if(S.status.running) call('pause'); else call('start').then(r=>toast(r.ok?r.message:r.error, r.ok?'ok':'err')); }
+});
+
+/* ---------------- boot ---------------- */
+async function boot(){
+  for(let i=0;i<60 && !api();i++) await new Promise(r=>setTimeout(r,250));
+  if(!api()){ toast('Bridge UI tidak tersedia. Jalankan lewat start.bat (bukan buka file HTML langsung).','err'); return; }
+  const r = await call('settings'); S.settings = r; fillSettings();
+  await loadQueue(); await loadLogs();
+  call('ui_ready', r.version);
+  poll();
+}
+boot();
+</script>
+</body>
+</html>

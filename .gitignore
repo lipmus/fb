@@ -1,0 +1,16 @@
+__pycache__/
+*.py[cod]
+*.egg-info/
+build/
+dist/
+.venv/
+venv/
+
+# data runtime: sesi terenkripsi, db, log, unduhan
+sessions/
+*.enc
+app.db
+app.db-wal
+app.db-shm
+ui_ready.json
+downloads/
