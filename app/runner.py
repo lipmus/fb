@@ -133,30 +133,108 @@ def dismiss_cookie_wall(page):
     return False
 
 
+def is_login_form(page):
+    """Ada form login di halaman -> belum login.
+
+    Dulu cek ini tidak ada dan hanya URL yang diperiksa: halaman facebook.com/login
+    memakai URL '/', jadi login dianggap 'sudah selesai' dan sesi KOSONG tersimpan.
+    """
+    try:
+        if page.query_selector("input[name='pass'], input[name='email']"):
+            return True
+    except Exception:
+        pass
+    try:
+        if page.query_selector("form[action*='login'], #login_form, [data-testid='royal_login_form']"):
+            return True
+    except Exception:
+        pass
+    return False
+
+
 def _looks_logged_in(page):
-    """True kalau URL bukan login/checkpoint; tak ada DOM cek karena FB mudah berubah."""
+    """True hanya kalau URL bersih DAN tidak ada form login di DOM."""
+    if page is None:
+        return False
     url = (page.url or "").lower()
     if any(h in url for h in CHECKPOINT_HINTS):
         return False
     if any(k in url for k in ("/login", "/r.php", "login.php")):
         return False
+    if is_login_form(page):
+        return False
+    # halaman login FB kadang memakai URL '/', jadi DOM adalah penentu utama
+    try:
+        host = (page.url or "").split("/")[2].lower().split(":")[0]
+        if host and not any(host == h or host.endswith("." + h) for h in FB_HOSTS):
+            return False
+    except Exception:
+        pass
     return True
 
 
-def check_session(page, db, aid):
-    page.goto("https://www.facebook.com/", wait_until="domcontentloaded", timeout=60000)
-    page.wait_for_timeout(2500)
-    dismiss_cookie_wall(page)
-    ok = _looks_logged_in(page)
-    db.update_account(aid, status="active" if ok else "needs_login",
-                      last_error="" if ok else "Sesi Facebook tidak aktif / butuh login")
-    return ok
+def has_session_cookie(storage_state):
+    """Sesi Facebook yang benar selalu punya cookie c_user. Tanpanya storage_state tak berguna."""
+    try:
+        return any(c.get("name") == "c_user" for c in (storage_state or {}).get("cookies", []))
+    except Exception:
+        return False
+
+
+def blocked_by_login(page):
+    """Untuk HALAMAN VIDEO: yang penting cuma apakah FB menyodorkan dinding login/checkpoint.
+
+    Cek host tidak dipakai di sini - link video bisa berakhir di fb.watch atau embed lain,
+    dan itu bukan tanda sesi mati."""
+    if page is None:
+        return True
+    url = (page.url or "").lower()
+    if any(h in url for h in CHECKPOINT_HINTS):
+        return True
+    if any(k in url for k in ("/login", "/r.php", "login.php")):
+        return True
+    return is_login_form(page)
+
+
+FB_HOME = "https://www.facebook.com/?sk=welcome"
+# host yang sah untuk halaman beranda; tes boleh menambah hostnya (mis. server lokal)
+FB_HOSTS = ("facebook.com", "fb.com", "fb.watch", "m.facebook.com", "web.facebook.com")
+
+
+def gotoC(page, url, timeout=60000):
+    """goto + tunggu jaringan tenang supaya redirect ke /login tidak terbaca sebagai halaman biasa."""
+    page.goto(url, wait_until="domcontentloaded", timeout=timeout)
+    try:
+        page.wait_for_load_state("networkidle", timeout=15000)
+    except Exception:
+        pass
+
+
+def check_session(page, db, aid, retries=3):
+    """Buka FB, nilai login, dan HANYA hapus sesi tersimpan kalau FB menolaknya."""
+    last = None
+    for i in range(retries):
+        try:
+            gotoC(page, FB_HOME)
+        except Exception as e:
+            last = f"{type(e).__name__}: {e}"
+            time.sleep(2 + i * 2)
+            continue
+        page.wait_for_timeout(2000)
+        dismiss_cookie_wall(page)
+        if _looks_logged_in(page):
+            db.update_account(aid, status="active", last_error="")
+            return True
+        last = "belum login / form login muncul"
+        time.sleep(2 + i * 2)
+    db.update_account(aid, status="needs_login", last_error=last or "belum login")
+    return False
 
 
 def verify_and_wait_login(page, db, aid, timeout_s=600):
-    """Dipanggil dari proses CLI login: buka FB, tunggu user login manual sampai status aktif."""
+    """Panggil dari proses CLI login: buka FB, tunggu user login manual sampai status aktif."""
     db.update_account(aid, status="needs_login", last_error="")
-    page.goto("https://www.facebook.com/", wait_until="domcontentloaded", timeout=60000)
+    gotoC(page, FB_HOME)
     end = time.time() + timeout_s
     last_status = None
     while time.time() < end:
@@ -319,7 +397,7 @@ class Worker(threading.Thread):
         page.wait_for_timeout(2500)
         dismiss_cookie_wall(page)
 
-        if not _looks_logged_in(page):
+        if blocked_by_login(page):
             ok = check_session(page, self.db, self.aid)
             if not ok:
                 return False, "sesi/login diminta FB saat buka link"
@@ -381,7 +459,8 @@ class Worker(threading.Thread):
             elif time.time() > no_video_deadline:
                 return False, "tidak ada elemen video di halaman ini"
             # jangan lewat dari durasi yang diminta
-            page.wait_for_timeout(int(max(150, min(speed * 0.35, left * 1000 - 150))))
+            left_ms = int(max(150, min(speed * 0.35, max(0.0, left) * 1000 - 150)))
+            page.wait_for_timeout(left_ms)
             if time.time() - t0 >= dur:
                 break
             if scroll_on:

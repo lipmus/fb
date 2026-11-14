@@ -13,10 +13,11 @@ import time
 import traceback
 from pathlib import Path
 
+from .crypto import load as sess_load, save as sess_save
 from .downloader import dest_path, is_fb_video_url, normalize, video_id
 from .paths import data_dir, db_path, session_path
-from .runner import Orchestrator, check_session, launch, dismiss_cookie_wall
-from .crypto import load as sess_load
+from .runner import (FB_HOME, FB_HOSTS, Orchestrator, _looks_logged_in, check_session,
+                     dismiss_cookie_wall, gotoC, has_session_cookie, launch)
 from .db import DB
 
 STATIC = Path(__file__).parent / "static"
@@ -131,25 +132,61 @@ class Api:
                 ctx = launch(b, acc, settings, None)
                 page = ctx.new_page()
                 print(f"[login] akun #{aid} siap dibuat")
-                page.goto("https://www.facebook.com/", wait_until="domcontentloaded", timeout=60000)
+                # ?sk=welcome memaksa render ulang status login (halaman / sering di-cache
+                # dan terlihat seperti sudah login walau belum)
+                gotoC(page, FB_HOME)
                 ok = False
                 end = time.time() + 900
+                streak = 0
+                warned = False
                 while time.time() < end:
                     try:
                         if page.is_closed():
                             break
                     except Exception:
                         break
-                    if self._is_logged_in(page):
-                        ok = True
-                        break
+                    if _looks_logged_in(page):
+                        # butuh 3 cek berturut-turut: transisi setelah submit form sempat
+                        # terbaca 'login' sekejap sebelum redirect selesai
+                        streak += 1
+                        if streak >= 3:
+                            ok = True
+                            break
+                    else:
+                        streak = 0
+                        if not warned and "checkpoint" in (page.url or "").lower():
+                            warned = True
+                            self.db.log("FB meminta verifikasi (checkpoint). Selesaikan di jendela "
+                                        "browser; sesi akan disimpan setelah selesai.", aid,
+                                        level="warn")
                     page.wait_for_timeout(2000)
                 if ok:
-                    self.db.update_account(aid, status="active", last_error="")
                     sess = ctx.storage_state()
-                    from .crypto import save as sess_save
-                    sess_save(session_path(data_dir(), aid), json.dumps(sess))
-                    self.db.log("Login berhasil; sesi disimpan terenkripsi", aid)
+                    names = [c.get("name") for c in sess.get("cookies", [])]
+                    self.db.log(f"Sesi terdeteksi aktif; cookie: {len(names)} "
+                                f"({'c_user' if 'c_user' in names else 'TANPA c_user'})", aid,
+                                level="info" if "c_user" in names else "warn")
+                    if not has_session_cookie(sess):
+                        self.db.update_account(aid, status="needs_login",
+                                               last_error="Login terdeteksi tapi cookie c_user tidak ada - "
+                                                          "coba login ulang")
+                        self.db.log("Dibatalkan: cookie c_user tidak ada, sesi tidak berguna", aid,
+                                    level="warn")
+                    else:
+                        sess_save(session_path(data_dir(), aid), json.dumps(sess))
+                        # verifikasi: baca ulang file terenkripsi, pastikan bisa didekripsi
+                        try:
+                            back = json.loads(sess_load(session_path(data_dir(), aid)))
+                            n = len(back.get("cookies", []))
+                            self.db.update_account(aid, status="active", last_error="")
+                            self.db.log(f"Login berhasil; sesi disimpan & terverifikasi "
+                                        f"({n} cookie) di {session_path(data_dir(), aid)}", aid)
+                            print(f"[login] akun #{aid} sesi tersimpan ({n} cookie)")
+                        except Exception as e:
+                            self.db.update_account(aid, status="error",
+                                                   last_error=f"gagal menulis sesi: {e}")
+                            self.db.log(f"GAGAL menulis/membaca ulang sesi: {type(e).__name__}: {e}",
+                                        aid, level="error")
                 else:
                     self.db.update_account(aid, status="needs_login",
                                            last_error="login tidak terdeteksi selesai")
@@ -162,15 +199,7 @@ class Api:
 
     @staticmethod
     def _is_logged_in(page):
-        url = (page.url or "").lower()
-        if any(h in url for h in ("checkpoint", "two_factor", "login/device-based",
-                                  "/login", "login.php", "/r.php", "/recover")):
-            return False
-        try:
-            has_login = page.query_selector("input[name='email'], input[name='pass']")
-        except Exception:
-            return False
-        return has_login is None and url.startswith("http")
+        return _looks_logged_in(page)
 
     def check_account(self, aid):
         aid = int(aid)

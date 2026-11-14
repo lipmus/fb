@@ -39,9 +39,12 @@ def free_port():
 
 
 def main():
-    from app import downloader
+    from app import downloader, runner as R
     from app.db import DB
     from app.runner import Orchestrator
+
+    # server uji lokal berperan sebagai "facebook.com" untuk cek sesi
+    R.FB_HOSTS = R.FB_HOSTS + ("127.0.0.1",)
 
     # link localhost hanya diterima di mode uji
     orig = downloader.is_fb_video_url
@@ -74,6 +77,7 @@ def main():
     httpd = ThreadingHTTPServer(("127.0.0.1", port), H)
     threading.Thread(target=httpd.serve_forever, daemon=True).start()
     base = f"http://127.0.0.1:{port}"
+    R.FB_HOME = f"{base}/feed"   # worker cek sesi ke sini, bukan internet
 
     db = DB(TMP / "t.db")
     accs = []
@@ -128,13 +132,17 @@ def main():
         per = {}
         for r in rows:
             per.setdefault(r["account_id"], []).append(r["d"])
-        avg = sum(sum(v) for v in per.values()) / sum(len(v) for v in per.values())
-        one_account = 6 * avg
-        serial = 3 * one_account
-        check("worker benar-benar paralel (mendekati 1 akun, bukan 3 akun berurutan)",
-              dt < one_account * 1.8,
-              f"{dt:.1f}s; 1 akun ~{one_account:.1f}s, berurutan ~{serial:.1f}s, "
-              f"rata-rata job {avg:.1f}s")
+        if not per:
+            check("worker benar-benar paralel (mendekati 1 akun, bukan 3 akun berurutan)",
+                  False, "tidak ada job tercatat")
+        else:
+            avg = sum(sum(v) for v in per.values()) / sum(len(v) for v in per.values())
+            one_account = 6 * avg
+            serial = 3 * one_account
+            check("worker benar-benar paralel (mendekati 1 akun, bukan 3 akun berurutan)",
+                  dt < one_account * 1.8,
+                  f"{dt:.1f}s; 1 akun ~{one_account:.1f}s, berurutan ~{serial:.1f}s, "
+                  f"rata-rata job {avg:.1f}s")
 
     print("\n== mode SPLIT: 3 akun, 6 item dibagi rata ==")
     db.clear_queue()

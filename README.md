@@ -78,16 +78,42 @@ menjatuhkan worker lain, dan tidak ada proses terpisah yang perlu di-reap saat a
 ## Menjalankan tes
 
 ```
-py -3.12 tests/smoke.py      # unit + browser nyata; cetak OK/FAIL per aspek
-py -3.12 tests/parallel.py   # 3 worker paralel nyata: mode all/split, batas worker, item rusak
-py -3.12 tests/downloader.py # pengunduh: server lokal + video uji, cek file hasil
-py -3.12 tests/ui_boot.py    # buka window GUI sungguhan, verifikasi bridge JS↔Python
+py -3.12 tests/smoke.py       # unit + browser nyata; cetak OK/FAIL per aspek
+py -3.12 tests/session.py     # login/sesi: deteksi login telat render, simpan+pulihkan cookie
+py -3.12 tests/parallel.py    # 3 worker paralel nyata: mode all/split, batas worker, item rusak
+py -3.12 tests/multi_account.py # N akun = N proses Chrome, cookie tidak bocor antar akun
+py -3.12 tests/downloader.py  # pengunduh: server lokal + video uji, cek file hasil
+py -3.12 tests/ui_boot.py     # buka window GUI sungguhan, verifikasi bridge JS↔Python
 ```
+
+## Sesi tidak tersimpan / minta login berulang?
+
+Cek log: pesan penyebabnya selalu ditulis. Alur penyimpanan sesi:
+
+1. Setelah kamu submit login, app menunggu halaman Facebook **3 kali berturut-turut**
+   terlihat sudah login (bukan sekali) — transisi setelah submit sempat terbaca "login"
+   sekejap sebelum redirect selesai.
+2. Lalu **cookie `c_user` dicek**. Tanpa cookie itu, sesi tidak berguna: app membatalkan
+   penyimpanan dan memberi tahu alasannya, bukan menandai akun aktif.
+3. File ditulis, lalu **dibaca ulang** untuk memastikan bisa didekripsi. Gagal = status `error`.
+
+Penyebab tersering, berurutan:
+
+- **Jendela login ditutup terlalu cepat.** App butuh ±6 detik setelah submit + tulis file.
+  Tunggu sampai kartu akun berubah jadi `aktif`; log akan berbunyi
+  "Login berhasil; sesi disimpan & terverifikasi (N cookie)".
+- **Facebook minta verifikasi (checkpoint/2FA).** Selesaikan di jendela browser. Status
+  tetap `belum login` sampai selesai — ini disengaja, tidak ada bypass.
+- **Login lewat akun yang tidak punya hak.** Sesi tersimpan tapi halaman video menolak.
+- **Hapus akun** ikut menghapus file sesinya (`sessions\account_<id>.enc`).
+
+Cek manual kapan saja: tombol **Cek sesi** di tab Akun (headless), atau
+`py -3.12 -m app.cli check`.
 
 ## Kalau Facebook mengubah struktur halaman
 
 Semua selector dan deteksi halaman terkumpul di bagian atas `app/runner.py`
-(`COOKIE_DISMISS`, `LOGIN_SELECTOR`, `CHECKPOINT_HINTS`, `BAD_PAGE_HINTS`).
+(`COOKIE_DISMISS`, `CHECKPOINT_HINTS`, `BAD_PAGE_HINTS`, `FB_HOSTS`, `FB_HOME`).
 Ubah di situ saja; logika scroll dan pemutaran tidak perlu disentuh.
 
 ## Batasan & catatan kepatuhan
