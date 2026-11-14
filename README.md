@@ -124,8 +124,12 @@ py -3.12 tests/parallel.py     # 3 worker paralel nyata: mode all/split, batas w
 py -3.12 tests/multi_account.py # N akun = N proses Chrome, cookie tidak bocor antar akun
 py -3.12 tests/downloader.py   # pengunduh: server lokal + video uji, cek file hasil
 py -3.12 tests/loop.py         # looping (2 putaran, batas, urutan) + impor/ekspor Excel
+py -3.12 tests/ui_js.py        # UI: elemen hilang / error JS / call() tanpa API (tanpa GUI)
 py -3.12 tests/ui_boot.py      # buka window GUI sungguhan, verifikasi bridge JS↔Python
 ```
+
+Folder `io/` dibuat otomatis saat pertama kali menulis file Excel. Namanya ada di tab
+Pengaturan (Info → folder data) dan di atas kotak tempel link.
 
 ## Sesi tidak tersimpan / minta login berulang?
 
