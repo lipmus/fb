@@ -157,75 +157,80 @@ class Api:
                             return True
 
                 gotoC(page, FB_HOME)
-                ok = False
+                sess = None
+                names = []
                 end = time.time() + 1800
-                streak = 0
-                warned = False
+                hint = 0
+                verifying = False
+                last_report = 0.0
                 while time.time() < end:
                     try:
                         if page.is_closed() or not app_alive():
                             break
                     except Exception:
                         break
-                    if _looks_logged_in(page):
-                        # butuh 3 cek berturut-turut: sesaat setelah submit form halaman
-                        # sempat terlihat 'login' sebelum redirect selesai
-                        streak += 1
-                        if streak >= 3:
-                            ok = True
-                            break
-                    else:
-                        streak = 0
-                        if needs_verification(page):
-                            if not warned:
-                                warned = True
-                                self.db.update_account(aid, status="needs_verification",
-                                                       last_error="Menunggu verifikasi/CAPTCHA diselesaikan")
-                                self.db.log("FB meminta verifikasi/CAPTCHA. SELESAIKAN di jendela "
-                                            "browser itu - aplikasi tidak menutup jendela, tunggu "
-                                            "sampai selesai. Sesi disimpan otomatis setelahnya.",
-                                            aid, level="warn")
-                            page.wait_for_timeout(1500)
-                            continue
-                    page.wait_for_timeout(2000)
-                    if warned and time.time() > end - 1:
+
+                    # Kunci sebenarnya: cookie sesi Facebook. Tampilan halaman cuma petunjuk -
+                    # jangan pernah menutup jendela hanya karena tebakan itu.
+                    try:
+                        st = ctx.storage_state()
+                        names = [c.get("name") for c in st.get("cookies", [])]
+                    except Exception:
+                        st, names = None, []
+                    if st is not None and has_session_cookie(st):
+                        sess = st
                         break
-                if ok:
-                    sess = ctx.storage_state()
-                    names = [c.get("name") for c in sess.get("cookies", [])]
-                    self.db.log(f"Sesi terdeteksi aktif; cookie: {len(names)} "
-                                f"({'c_user' if 'c_user' in names else 'TANPA c_user'})", aid,
-                                level="info" if "c_user" in names else "warn")
-                    if not has_session_cookie(sess):
-                        self.db.update_account(aid, status="needs_login",
-                                               last_error="Login terdeteksi tapi cookie c_user tidak ada - "
-                                                          "coba login ulang")
-                        self.db.log("Dibatalkan: cookie c_user tidak ada, sesi tidak berguna", aid,
-                                    level="warn")
-                    else:
-                        sess_save(session_path(data_dir(), aid), json.dumps(sess))
-                        # verifikasi: baca ulang file terenkripsi, pastikan bisa didekripsi
-                        try:
-                            back = json.loads(sess_load(session_path(data_dir(), aid)))
-                            n = len(back.get("cookies", []))
-                            self.db.update_account(aid, status="active", last_error="")
-                            self.db.log(f"Login berhasil; sesi disimpan & terverifikasi "
-                                        f"({n} cookie) di {session_path(data_dir(), aid)}", aid)
-                            print(f"[login] akun #{aid} sesi tersimpan ({n} cookie)")
-                        except Exception as e:
-                            self.db.update_account(aid, status="error",
-                                                   last_error=f"gagal menulis sesi: {e}")
-                            self.db.log(f"GAGAL menulis/membaca ulang sesi: {type(e).__name__}: {e}",
-                                        aid, level="error")
-                elif warned:
+
+                    hint = hint + 1 if _looks_logged_in(page) else 0
+
+                    if needs_verification(page):
+                        if not verifying:
+                            verifying = True
+                            self.db.update_account(
+                                aid, status="needs_verification",
+                                last_error="Menunggu verifikasi/CAPTCHA diselesaikan")
+                            self.db.log("FB meminta verifikasi/CAPTCHA. SELESAIKAN di jendela "
+                                        "browser itu - aplikasi menunggu dan tidak menutup "
+                                        "jendela. Sesi disimpan otomatis setelahnya.",
+                                        aid, level="warn")
+                        page.wait_for_timeout(1500)
+                        continue
+
+                    if time.time() - last_report > 60:
+                        last_report = time.time()
+                        self.db.log(
+                            f"Masih menunggu login... {len(names)} cookie terbaca "
+                            f"({', '.join(names[:6]) if names else 'belum ada'})"
+                            + ("; halaman tampak seperti beranda tapi cookie sesi belum muncul"
+                               if hint >= 2 else ""), aid)
+                    page.wait_for_timeout(2000)
+
+                if sess is not None:
+                    sess_save(session_path(data_dir(), aid), json.dumps(sess))
+                    # verifikasi: baca ulang file terenkripsi, pastikan bisa didekripsi
+                    try:
+                        back = json.loads(sess_load(session_path(data_dir(), aid)))
+                        n = len(back.get("cookies", []))
+                        self.db.update_account(aid, status="active", last_error="")
+                        self.db.log(f"Login berhasil; sesi {n} cookie disimpan & terverifikasi "
+                                    f"di {session_path(data_dir(), aid)}", aid)
+                        print(f"[login] akun #{aid} sesi tersimpan ({n} cookie)")
+                    except Exception as e:
+                        self.db.update_account(aid, status="error",
+                                               last_error=f"gagal menulis sesi: {e}")
+                        self.db.log(f"GAGAL menulis/membaca ulang sesi: {type(e).__name__}: {e}",
+                                    aid, level="error")
+                elif verifying:
                     self.db.update_account(aid, status="needs_verification",
                                            last_error="Verifikasi tidak selesai (waktu habis)")
                     self.db.log("Verifikasi tidak selesai dalam 30 menit. Klik Login lagi kalau "
                                 "masih perlu.", aid, level="warn")
                 else:
-                    self.db.update_account(aid, status="needs_login",
-                                           last_error="login tidak terdeteksi selesai")
-                    self.db.log("Login tidak selesai / jendela ditutup", aid, level="warn")
+                    detail = (f"cookie sesi tidak pernah muncul (terbaca: "
+                              f"{', '.join(names[:6]) if names else 'tidak ada'})")
+                    self.db.update_account(aid, status="needs_login", last_error=detail)
+                    self.db.log(f"Jendela ditutup / login tidak selesai: {detail}", aid,
+                                level="warn")
                 ctx.close()
                 b.close()
         except Exception as e:
